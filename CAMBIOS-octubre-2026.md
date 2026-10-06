@@ -4,7 +4,7 @@ Arreglos de la revisión completa (guía de bugs C1–C5, S1–S6, P1–P6, V1�
 
 ## Antes de subir
 
-1. **Railway → Variables**: cargá `JWT_SECRET` (32+ caracteres al azar) y `MASTER_KEY` (una clave tuya).
+1. **Railway → Variables** : cargá `JWT_SECRET` (32+ caracteres al azar) y `MASTER_KEY` (una clave tuya).
    - Sin `JWT_SECRET`, el sistema usa una clave al azar y las sesiones se cierran en cada reinicio.
    - Sin `MASTER_KEY` (o con la de fábrica), "¿Olvidaste tu contraseña?" queda desactivado.
 2. `DB_PASSWORD` ya no tiene valor por defecto en el código: en Railway ya la tenés cargada; para correrlo en tu compu, definila como variable de entorno.
