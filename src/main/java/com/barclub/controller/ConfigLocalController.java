@@ -41,6 +41,12 @@ public class ConfigLocalController {
     @Operation(summary = "Guardar configuración del local", description = "Actualiza la configuración. Solo debe ser usado por el admin.")
     @ApiResponse(responseCode = "200", description = "Configuración actualizada")
     public ResponseEntity<ConfigLocal> guardar(@RequestBody ConfigLocal cfg) {
+        // Lo que no viene en el JSON (estado de la caja) se conserva tal como
+        // está en la base: guardar la configuración nunca toca la caja.
+        ConfigLocal actual = service.obtener();
+        cfg.setCierreCaja(actual.getCierreCaja());
+        cfg.setCajaAbierta(actual.getCajaAbierta());
+        cfg.setLoginEmails("[]");
         return ResponseEntity.ok(service.guardar(cfg));
     }
 }

@@ -20,12 +20,17 @@ public class PedidoRequestDTO {
     // Opcional: cliente registrado
     private Long clienteId;
 
-    // Obligatorio: id del usuario (cajero/empleado que lo registra)
-    @NotNull(message = "El usuario es obligatorio")
+    // Ya no se usa para asignar el pedido (el servidor usa el usuario que
+    // inició sesión, ver PedidoService.crear). Se deja opcional para que las
+    // versiones del frontend que todavía lo mandan sigan funcionando.
     private Long usuarioId;
 
     // Para pedidos sin cuenta o delivery
+    // Límites de largo: antes un texto más largo que la columna de la base
+    // daba "error interno" (500) en vez de un mensaje claro.
+    @Size(max = 100, message = "El nombre no puede superar los 100 caracteres")
     private String nombreCliente;
+    @Size(max = 30, message = "El teléfono no puede superar los 30 caracteres")
     private String telefonoCliente;
     @Size(max = 200, message = "La dirección no puede superar los 200 caracteres")
     private String direccionEntrega;
@@ -38,6 +43,7 @@ public class PedidoRequestDTO {
     private LocalTime horarioEntrega;
 
     // Nº de mesa (pedidos en salón)
+    @Size(max = 20, message = "La mesa no puede superar los 20 caracteres")
     private String mesa;
 
     // Método de pago elegido por el cliente (opcional)

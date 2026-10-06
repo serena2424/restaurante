@@ -19,6 +19,7 @@ import java.util.List;
 public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
+    private final com.barclub.repository.UsuarioRepository usuarioRepository;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -32,12 +33,20 @@ public class JwtFilter extends OncePerRequestFilter {
             String token = authHeader.substring(7);
             if (jwtUtil.esValido(token)) {
                 String email = jwtUtil.extraerEmail(token);
-                String rol   = jwtUtil.extraerRol(token);
-                var auth = new UsernamePasswordAuthenticationToken(
-                        email, null,
-                        List.of(new SimpleGrantedAuthority("ROLE_" + rol))
-                );
-                SecurityContextHolder.getContext().setAuthentication(auth);
+                // El rol y el estado se leen de la BASE en cada pedido, no del
+                // token: así, si el admin desactiva a un usuario o le cambia el
+                // rol, la sesión que ese usuario tenga abierta deja de valer (o
+                // pasa a tener el rol nuevo) al instante, en vez de seguir
+                // funcionando con los permisos viejos hasta que venza el token.
+                usuarioRepository.findByEmail(email)
+                        .filter(com.barclub.entity.Usuario::estaActivo)
+                        .ifPresent(u -> {
+                            var auth = new UsernamePasswordAuthenticationToken(
+                                    u.getEmail(), null,
+                                    List.of(new SimpleGrantedAuthority("ROLE_" + u.getRol().name()))
+                            );
+                            SecurityContextHolder.getContext().setAuthentication(auth);
+                        });
             }
         }
 

@@ -5,14 +5,12 @@ import com.barclub.entity.Venta;
 import com.barclub.repository.CierreCajaRepository;
 import com.barclub.repository.VentaRepository;
 import com.barclub.service.VentaService;
-import jakarta.annotation.PostConstruct;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Corrige la jornada de las ventas al arrancar el servidor — tanto las que
@@ -40,13 +38,32 @@ public class BackfillJornadaVentas {
         this.ventaService = ventaService;
     }
 
-    @PostConstruct
-    @Transactional
+    // Antes era @PostConstruct + @Transactional, pero en @PostConstruct la
+    // anotación @Transactional no tiene efecto (el bean todavía no está
+    // envuelto por Spring). Ahora corre cuando la aplicación terminó de
+    // arrancar; cada saveAll tiene su propia transacción del repositorio.
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     public void rellenar() {
         List<Venta> todas = ventaRepository.findAll();
         if (todas.isEmpty()) return;
 
         List<CierreCaja> cajas = cierreCajaRepository.findAll();
+        // La caja ABIERTA en este momento todavía no tiene registro de cierre.
+        // Antes, sus ventas quedaban sin caja en este recálculo y pasaban a su
+        // fecha de calendario: si el servidor se reiniciaba de madrugada (un
+        // redeploy, un reinicio de Railway), las ventas de después de
+        // medianoche saltaban al día siguiente y la noche quedaba partida.
+        LocalDateTime aperturaCajaActual = null;
+        try {
+            java.util.Map<String, Object> estado = ventaService.estadoCaja();
+            Object desde = estado.get("abiertaDesde");
+            if (Boolean.TRUE.equals(estado.get("abierta")) && desde != null && !String.valueOf(desde).isBlank()) {
+                aperturaCajaActual = LocalDateTime.parse(String.valueOf(desde));
+            }
+        } catch (Exception e) {
+            log.warn("BackfillJornadaVentas: no se pudo leer la caja actual: {}", e.getMessage());
+        }
+        final LocalDateTime aperturaActual = aperturaCajaActual;
         int corregidas = 0;
         for (Venta v : todas) {
             if (v.getFecha() == null || v.getHora() == null) continue;
@@ -58,7 +75,7 @@ public class BackfillJornadaVentas {
                     .filter(c -> !momento.isBefore(c.getFechaApertura()) && momento.isBefore(c.getFechaCierre()))
                     .map(CierreCaja::getFechaApertura)
                     .findFirst()
-                    .orElse(null);
+                    .orElse(aperturaActual != null && !momento.isBefore(aperturaActual) ? aperturaActual : null);
 
             LocalDate jornadaCorrecta = ventaService.calcularJornada(momento, aperturaDeSuCaja);
 

@@ -21,8 +21,31 @@ public class JwtUtil {
     @Value("${jwt.expiration}")
     private long expiration;
 
+    /** Valor de fábrica de jwt.secret (público en el repo). */
+    public static final String JWT_SECRET_DE_FABRICA = "CambiameEnProduccionSecretJWTGenericoDelSistema2026";
+
+    private SecretKey key;
+
+    // Si el servidor no tiene JWT_SECRET configurado, el secreto sería el de
+    // fábrica, que está en el código público: cualquiera podría fabricarse un
+    // token de ADMIN. En ese caso se genera uno al azar en cada arranque (lo
+    // único que cambia es que, al reiniciar el servidor, hay que volver a
+    // iniciar sesión). Configurando JWT_SECRET en Railway las sesiones
+    // sobreviven a los reinicios.
+    @jakarta.annotation.PostConstruct
+    void inicializarClave() {
+        if (secret == null || secret.isBlank() || JWT_SECRET_DE_FABRICA.equals(secret) || secret.getBytes().length < 32) {
+            byte[] azar = new byte[64];
+            new java.security.SecureRandom().nextBytes(azar);
+            key = Keys.hmacShaKeyFor(azar);
+            logger.warn("JWT_SECRET no configurado (o demasiado corto): se usa una clave aleatoria. Las sesiones se cierran en cada reinicio del servidor. Definí JWT_SECRET (32+ caracteres) en las variables de entorno.");
+        } else {
+            key = Keys.hmacShaKeyFor(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
     private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes());
+        return key;
     }
 
     public String generarToken(String email, String rol) {

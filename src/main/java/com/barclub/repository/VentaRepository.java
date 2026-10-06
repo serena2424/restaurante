@@ -43,6 +43,16 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
            "GROUP BY pr.id, pr.nombre, pr.categoria ORDER BY SUM(d.cantidad) DESC")
     List<Object[]> rankingProductos(LocalDate desde, LocalDate hasta);
 
+    /** Ventas de un rango de jornadas (día de trabajo, ver Venta.jornada). */
+    @Query("SELECT v FROM Venta v WHERE v.jornada BETWEEN :desde AND :hasta ORDER BY v.fecha DESC, v.hora DESC")
+    List<Venta> findEntreJornadas(LocalDate desde, LocalDate hasta);
+
+    @Query("SELECT pr.nombre, pr.categoria, SUM(d.cantidad), SUM(d.subtotal) " +
+           "FROM Venta v JOIN v.pedido p JOIN p.detalles d JOIN d.producto pr " +
+           "WHERE v.jornada BETWEEN :desde AND :hasta " +
+           "GROUP BY pr.id, pr.nombre, pr.categoria ORDER BY SUM(d.cantidad) DESC")
+    List<Object[]> rankingProductosPorJornada(LocalDate desde, LocalDate hasta);
+
     // Ventas desde un momento dado (cierre de caja)
     @Query("SELECT v FROM Venta v WHERE v.fecha > :fecha OR (v.fecha = :fecha AND v.hora >= :hora) ORDER BY v.fecha DESC, v.hora DESC")
     List<Venta> findDesde(LocalDate fecha, LocalTime hora);

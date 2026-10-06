@@ -34,20 +34,22 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            // Sin esto, Spring Security devuelve 403 tanto para "no mandaste
-            // token / está vencido" como para "tenés token válido pero no te
-            // alcanza el rol" — quedaban indistinguibles. El panel solo sabía
-            // reaccionar al 401 (te vuelve a mandar al login), así que una
-            // sesión vencida terminaba mostrando "Error al cargar reservas" /
-            // "No se pudo cobrar" sueltos por todos lados en vez de mandarte
-            // a iniciar sesión de nuevo. Ahora: sin token o token inválido →
-            // 401 (acá abajo); con token válido pero rol insuficiente → sigue
-            // siendo 403 (comportamiento normal de Spring, sin tocar).
-            .exceptionHandling(ex -> ex.authenticationEntryPoint(
-                (request, response, authException) ->
-                    response.sendError(HttpStatus.UNAUTHORIZED.value(), "No autenticado")
-            ))
+            // Sin token / token inválido → 401 (el panel manda a iniciar sesión).
+            // Token válido pero rol insuficiente → 403 (el panel avisa "no tenés
+            // permiso" y NO cierra la sesión). Antes el 403 terminaba saliendo
+            // como 401: sendError() hace un "reenvío interno" a /error, y ese
+            // reenvío volvía a pasar por la seguridad sin sesión (la app es
+            // stateless) → 401. Resultado: un mozo o cocina que tocaba algo no
+            // permitido quedaba deslogueado. Ahora las dos respuestas se
+            // escriben directo, sin pasar por /error, y /error queda abierto.
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) ->
+                    escribirError(response, HttpStatus.UNAUTHORIZED, "No autenticado"))
+                .accessDeniedHandler((request, response, deniedException) ->
+                    escribirError(response, HttpStatus.FORBIDDEN, "No tenés permiso para hacer esto con tu usuario"))
+            )
             .authorizeHttpRequests(auth -> auth
+                .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ERROR).permitAll()
                 // ── Endpoints públicos ──────────────────────────────────────
                 .requestMatchers(HttpMethod.GET,  "/api/productos/activos").permitAll()
                 .requestMatchers(HttpMethod.GET,  "/api/productos/categoria/**").permitAll()
@@ -69,6 +71,8 @@ public class SecurityConfig {
 
                 // ── SOLO ADMIN: administración del sistema ──────────────────
                 // Gestión de usuarios, configuración del local y backups.
+                // Datos del propio usuario (para retomar la sesión al recargar): cualquier rol.
+                .requestMatchers(HttpMethod.GET, "/api/usuarios/me").authenticated()
                 .requestMatchers("/api/usuarios/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT,    "/api/config/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST,   "/api/config/**").hasRole("ADMIN")
@@ -83,6 +87,10 @@ public class SecurityConfig {
                 .requestMatchers("/api/clientes/**").hasAnyRole("ADMIN", "CAJERO")
                 // Reservas: las gestionan admin y cajero.
                 .requestMatchers(HttpMethod.GET,    "/api/reservas/**").hasAnyRole("ADMIN", "CAJERO")
+                // Editar una reserva (antes no tenía regla y caía en "cualquier
+                // usuario logueado": cocina y mozo podían modificarlas).
+                .requestMatchers(HttpMethod.PUT,    "/api/reservas/**").hasAnyRole("ADMIN", "CAJERO")
+                .requestMatchers(HttpMethod.POST,   "/api/reservas/**").hasAnyRole("ADMIN", "CAJERO")
                 .requestMatchers(HttpMethod.PATCH,  "/api/reservas/**").hasAnyRole("ADMIN", "CAJERO")
                 .requestMatchers(HttpMethod.DELETE, "/api/reservas/**").hasAnyRole("ADMIN", "CAJERO")
 
@@ -121,6 +129,13 @@ public class SecurityConfig {
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    private static void escribirError(jakarta.servlet.http.HttpServletResponse response,
+                                      HttpStatus status, String mensaje) throws java.io.IOException {
+        response.setStatus(status.value());
+        response.setContentType("application/json;charset=UTF-8");
+        response.getWriter().write("{\"status\":" + status.value() + ",\"error\":\"" + mensaje + "\",\"message\":\"" + mensaje + "\"}");
     }
 
     @Bean

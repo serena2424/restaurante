@@ -92,6 +92,14 @@ public class ConfigLocal {
     private String herotextcolor;
 
     // Momento del último cierre de caja (ISO datetime). Vacío = nunca se cerró.
+    // Estado de la caja: NO viaja en el JSON de /api/config (ni de ida ni de
+    // vuelta). Antes sí viajaba, así que (1) cualquiera veía el estado de la
+    // caja en la API pública, y (2) al guardar la Configuración el panel
+    // mandaba la copia que había cargado antes: si mientras tanto alguien
+    // cerró la caja, guardar la config la volvía a abrir y la próxima caja
+    // contaba otra vez las ventas ya cerradas. La caja se maneja solo con
+    // /api/ventas/caja, /cerrar-caja y /abrir-caja.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private String cierreCaja;
 
     // Si la caja está actualmente abierta para cobrar. Empieza en true (el
@@ -99,11 +107,16 @@ public class ConfigLocal {
     // cerrar caja, y hay que abrirla de nuevo explícitamente antes de poder
     // registrar otra venta — evita cobrar con la caja "cerrada" de la
     // jornada anterior sin que nadie se dé cuenta.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Builder.Default
     private Boolean cajaAbierta = true;
 
     // Emails habilitados para acceso rápido en el login del panel admin
     // Guardados como JSON array: ["email1@x.com","email2@x.com"]
+    // Ya no se usa (los emails de acceso rápido se guardan en cada
+    // dispositivo): la API pública los mostraba a cualquiera. Se deja la
+    // columna para no romper bases existentes, pero nunca sale en el JSON.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(length = 1000)
     @Builder.Default
     private String loginEmails = "[]";

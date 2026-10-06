@@ -2,8 +2,6 @@ package com.barclub.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.OnDelete;
-import org.hibernate.annotations.OnDeleteAction;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,10 +53,10 @@ public class Pedido {
     @EqualsAndHashCode.Exclude
     private Cliente cliente;
 
-    // Usuario que registró el pedido (con cascada)
+    // Usuario al que queda asignado el pedido. SIN cascada: borrar un usuario
+    // nunca debe arrastrar sus pedidos ni sus ventas (ver Usuario.activo).
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "usuario_id", nullable = false)
-    @OnDelete(action = OnDeleteAction.CASCADE)
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
     private Usuario usuario;

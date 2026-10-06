@@ -25,8 +25,10 @@ public class ReservaRequestDTO {
     @Max(value = 20, message = "Máximo 20 personas")
     private Integer cantidadPersonas;
 
+    @Size(max = 30, message = "El teléfono no puede superar los 30 caracteres")
     private String telefono;
 
+    @Size(max = 255, message = "Las aclaraciones no pueden superar los 255 caracteres")
     private String aclaraciones;
 
     // Opcional: cliente registrado

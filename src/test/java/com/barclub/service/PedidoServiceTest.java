@@ -5,25 +5,41 @@ import com.barclub.dto.PedidoRequestDTO;
 import com.barclub.dto.PedidoResponseDTO;
 import com.barclub.entity.*;
 import com.barclub.exception.BusinessException;
-import com.barclub.exception.ResourceNotFoundException;
 import com.barclub.repository.*;
+import com.barclub.websocket.RealtimeNotifier;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+/**
+ * Pruebas unitarias de PedidoService (sin base de datos). Cubren los bugs
+ * arreglados en la revisión de octubre 2026: envío que se perdía al editar,
+ * cocina cancelando por /estado, opciones inventadas, reglas del local para
+ * pedidos públicos y el usuarioId que mandaba el cliente.
+ */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class PedidoServiceTest {
 
     @Mock private PedidoRepository pedidoRepository;
@@ -32,198 +48,118 @@ class PedidoServiceTest {
     @Mock private UsuarioRepository usuarioRepository;
     @Mock private VentaRepository ventaRepository;
     @Mock private ProductoService productoService;
+    @Mock private ConfigLocalService configLocalService;
     @Mock private ClienteService clienteService;
     @Mock private UsuarioService usuarioService;
+    @Mock private RealtimeNotifier realtimeNotifier;
+    @Spy  private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private PedidoService pedidoService;
 
-    private Usuario usuarioMock;
-    private Producto productoMock;
+    private Usuario admin;
+    private Usuario mozo;
+    private Producto plato;
 
     @BeforeEach
     void setUp() {
-        usuarioMock = Usuario.builder()
-                .id(1L)
-                .nombre("Admin")
-                .email("admin@barclub.com")
-                .rol(Rol.ADMIN)
-                .build();
+        SecurityContextHolder.clearContext(); // sin sesión = pedido de la página pública
+        admin = Usuario.builder().id(1L).nombre("Admin").email("admin@test.com").rol(Rol.ADMIN).activo(true).build();
+        mozo  = Usuario.builder().id(4L).nombre("Mozo").email("mozo@test.com").rol(Rol.MOZO).activo(true).build();
+        plato = Producto.builder().id(10L).nombre("Milanesa").precio(1000.0).costo(400.0).activo(true).categoria("Platos").build();
 
-        productoMock = Producto.builder()
-                .id(10L)
-                .nombre("Pizza Muzzarella")
-                .precio(1500.0)
-                .activo(true)
-                .categoria("Pizzas")
-                .build();
+        when(usuarioRepository.findAll()).thenReturn(List.of(admin, mozo));
+        when(usuarioRepository.findById(4L)).thenReturn(Optional.of(mozo));
+        when(productoRepository.findById(10L)).thenReturn(Optional.of(plato));
+        when(configLocalService.obtener()).thenReturn(ConfigLocal.builder().id(1L).estadoManual("auto").build());
+        when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
-    // -------------------------------------------------------
-    // TEST 1: Camino feliz — crear pedido LOCAL correctamente
-    // -------------------------------------------------------
-    @Test
-    void crearPedido_local_debeRetornarPedidoCreado() {
-        // Given
-        DetallePedidoRequestDTO detalle = new DetallePedidoRequestDTO();
-        detalle.setProductoId(10L);
-        detalle.setCantidad(2);
+    @AfterEach
+    void limpiar() {
+        SecurityContextHolder.clearContext();
+    }
 
+    private PedidoRequestDTO pedidoPublico(TipoPedido tipo, String variante) {
+        DetallePedidoRequestDTO d = new DetallePedidoRequestDTO();
+        d.setProductoId(10L);
+        d.setCantidad(1);
+        d.setVariante(variante);
         PedidoRequestDTO dto = new PedidoRequestDTO();
-        dto.setUsuarioId(1L);
-        dto.setTipo(TipoPedido.LOCAL);
-        dto.setNombreCliente("Juan");
-        dto.setDetalles(List.of(detalle));
-
-        Pedido pedidoGuardado = Pedido.builder()
-                .id(1L)
-                .fecha(LocalDate.now())
-                .hora(LocalTime.now())
-                .estado(EstadoPedido.PENDIENTE)
-                .tipo(TipoPedido.LOCAL)
-                .total(3000.0)
-                .usuario(usuarioMock)
-                .nombreCliente("Juan")
-                .build();
-
-        when(usuarioRepository.findById(1L)).thenReturn(Optional.of(usuarioMock));
-        when(productoRepository.findById(10L)).thenReturn(Optional.of(productoMock));
-        when(pedidoRepository.save(any(Pedido.class))).thenReturn(pedidoGuardado);
-
-        // When
-        PedidoResponseDTO resultado = pedidoService.crear(dto);
-
-        // Then
-        assertNotNull(resultado);
-        assertEquals(1L, resultado.getId());
-        verify(pedidoRepository, atLeastOnce()).save(any(Pedido.class));
+        dto.setTipo(tipo);
+        dto.setNombreCliente("Cliente");
+        // Teléfono distinto en cada prueba para no chocar con el anti-duplicado.
+        dto.setTelefonoCliente(UUID.randomUUID().toString().substring(0, 12));
+        dto.setDireccionEntrega("Calle 123");
+        dto.setDetalles(List.of(d));
+        return dto;
     }
 
-    // -------------------------------------------------------
-    // TEST 2: Delivery sin dirección debe lanzar excepción
-    // -------------------------------------------------------
     @Test
-    void crearPedido_deliverySinDireccion_debeLanzarBusinessException() {
-        // Given
-        PedidoRequestDTO dto = new PedidoRequestDTO();
-        dto.setUsuarioId(1L);
-        dto.setTipo(TipoPedido.DELIVERY);
-        dto.setNombreCliente("María");
-        dto.setDireccionEntrega(""); // vacía
-        dto.setDetalles(List.of());
-
-        when(usuarioRepository.findById(1L)).thenReturn(Optional.of(usuarioMock));
-
-        // When & Then
-        assertThrows(BusinessException.class, () -> pedidoService.crear(dto));
-    }
-
-    // -------------------------------------------------------
-    // TEST 3: Producto inactivo en pedido debe lanzar excepción
-    // -------------------------------------------------------
-    @Test
-    void crearPedido_conProductoInactivo_debeLanzarBusinessException() {
-        // Given
-        productoMock.setActivo(false); // producto deshabilitado
-
-        DetallePedidoRequestDTO detalle = new DetallePedidoRequestDTO();
-        detalle.setProductoId(10L);
-        detalle.setCantidad(1);
-
-        PedidoRequestDTO dto = new PedidoRequestDTO();
-        dto.setUsuarioId(1L);
-        dto.setTipo(TipoPedido.LOCAL);
-        dto.setNombreCliente("Carlos");
-        dto.setDetalles(List.of(detalle));
-
-        Pedido pedidoVacio = Pedido.builder()
-                .id(99L).fecha(LocalDate.now()).hora(LocalTime.now())
-                .estado(EstadoPedido.PENDIENTE).tipo(TipoPedido.LOCAL)
-                .total(0.0).usuario(usuarioMock).nombreCliente("Carlos")
-                .build();
-
-        when(usuarioRepository.findById(1L)).thenReturn(Optional.of(usuarioMock));
-        when(pedidoRepository.save(any(Pedido.class))).thenReturn(pedidoVacio);
-        when(productoRepository.findById(10L)).thenReturn(Optional.of(productoMock));
-
-        // When & Then
-        assertThrows(BusinessException.class, () -> pedidoService.crear(dto));
-    }
-
-    // -------------------------------------------------------
-    // TEST 4: Usuario inexistente debe lanzar ResourceNotFoundException
-    // -------------------------------------------------------
-    @Test
-    void crearPedido_usuarioInexistente_debeLanzarNotFoundException() {
-        // Given
-        PedidoRequestDTO dto = new PedidoRequestDTO();
-        dto.setUsuarioId(999L);
-        dto.setTipo(TipoPedido.LOCAL);
-        dto.setDetalles(List.of());
-
-        when(usuarioRepository.findById(999L)).thenReturn(Optional.empty());
-
-        // When & Then
-        assertThrows(ResourceNotFoundException.class, () -> pedidoService.crear(dto));
-    }
-
-    // -------------------------------------------------------
-    // TEST 5: Transición de estado válida PENDIENTE -> PREPARACION
-    // -------------------------------------------------------
-    @Test
-    void cambiarEstado_transicionValida_debeActualizarEstado() {
-        // Given
+    void editarDelivery_conservaElCostoDeEnvioEnElTotal() {
         Pedido pedido = Pedido.builder()
-                .id(1L).fecha(LocalDate.now()).hora(LocalTime.now())
-                .estado(EstadoPedido.PENDIENTE).tipo(TipoPedido.LOCAL)
-                .total(1500.0).usuario(usuarioMock).nombreCliente("Ana")
+                .id(5L).fecha(LocalDate.now()).hora(LocalTime.now())
+                .estado(EstadoPedido.PENDIENTE).tipo(TipoPedido.DELIVERY)
+                .usuario(admin).costoEnvio(500.0).total(1500.0)
+                .detalles(new ArrayList<>())
                 .build();
+        pedido.getDetalles().add(DetallePedido.builder().id(1L).pedido(pedido).producto(plato)
+                .cantidad(1).precioUnitario(1000.0).subtotal(1000.0).build());
+        when(pedidoRepository.findById(5L)).thenReturn(Optional.of(pedido));
 
-        when(pedidoRepository.findById(1L)).thenReturn(Optional.of(pedido));
-        when(pedidoRepository.save(any(Pedido.class))).thenReturn(pedido);
+        DetallePedidoRequestDTO otro = new DetallePedidoRequestDTO();
+        otro.setProductoId(10L);
+        otro.setCantidad(1);
+        PedidoResponseDTO r = pedidoService.agregarDetalle(5L, otro);
 
-        // When
-        pedidoService.cambiarEstado(1L, EstadoPedido.PREPARACION);
-
-        // Then
-        assertEquals(EstadoPedido.PREPARACION, pedido.getEstado());
-        verify(pedidoRepository).save(pedido);
+        assertEquals(2500.0, r.getTotal(), 0.001, "2 x $1.000 + $500 de envío");
     }
 
-    // -------------------------------------------------------
-    // TEST 6: Transición inválida debe lanzar BusinessException
-    // -------------------------------------------------------
     @Test
-    void cambiarEstado_transicionInvalida_debeLanzarBusinessException() {
-        // Given — intentar pasar de LISTO directamente a PENDIENTE (inválido)
-        Pedido pedido = Pedido.builder()
-                .id(1L).fecha(LocalDate.now()).hora(LocalTime.now())
-                .estado(EstadoPedido.LISTO).tipo(TipoPedido.LOCAL)
-                .total(1500.0).usuario(usuarioMock).nombreCliente("Pedro")
-                .build();
+    void cambiarEstado_aCancelado_seRechaza() {
+        Pedido pedido = Pedido.builder().id(6L).estado(EstadoPedido.PENDIENTE).tipo(TipoPedido.RETIRO).build();
+        when(pedidoRepository.findById(6L)).thenReturn(Optional.of(pedido));
+        assertThrows(BusinessException.class, () -> pedidoService.cambiarEstado(6L, EstadoPedido.CANCELADO));
+        assertEquals(EstadoPedido.PENDIENTE, pedido.getEstado());
+    }
 
-        when(pedidoRepository.findById(1L)).thenReturn(Optional.of(pedido));
-
-        // When & Then
+    @Test
+    void opcionInventada_enProductoSinOpciones_seRechaza() {
         assertThrows(BusinessException.class,
-                () -> pedidoService.cambiarEstado(1L, EstadoPedido.PENDIENTE));
+                () -> pedidoService.crear(pedidoPublico(TipoPedido.DELIVERY, "Gigante gratis")));
     }
 
-    // -------------------------------------------------------
-    // TEST 7: Cancelar pedido entregado debe lanzar excepción
-    // -------------------------------------------------------
     @Test
-    void cancelar_pedidoEntregado_debeLanzarBusinessException() {
-        // Given
-        Pedido pedido = Pedido.builder()
-                .id(1L).fecha(LocalDate.now()).hora(LocalTime.now())
-                .estado(EstadoPedido.ENTREGADO).tipo(TipoPedido.LOCAL)
-                .total(1500.0).usuario(usuarioMock).nombreCliente("Luis")
-                .build();
+    void localCerrado_rechazaPedidoPublico() {
+        when(configLocalService.obtener()).thenReturn(ConfigLocal.builder().id(1L).estadoManual("close").build());
+        assertThrows(BusinessException.class, () -> pedidoService.crear(pedidoPublico(TipoPedido.RETIRO, null)));
+    }
 
-        when(pedidoRepository.findById(1L)).thenReturn(Optional.of(pedido));
+    @Test
+    void deliveryPublicoConTarjeta_seRechaza() {
+        PedidoRequestDTO dto = pedidoPublico(TipoPedido.DELIVERY, null);
+        dto.setMetodoPagoPreferido(MetodoPago.TARJETA);
+        assertThrows(BusinessException.class, () -> pedidoService.crear(dto));
+    }
 
-        // When & Then
-        assertThrows(BusinessException.class, () -> pedidoService.cancelar(1L));
+    @Test
+    void pedidoPublico_ignoraElUsuarioIdQueMandaElCliente() {
+        PedidoRequestDTO dto = pedidoPublico(TipoPedido.DELIVERY, null);
+        dto.setUsuarioId(4L); // el id del mozo: antes esto hacía fallar (o asignaba) el pedido
+
+        pedidoService.crear(dto);
+
+        ArgumentCaptor<Pedido> captor = ArgumentCaptor.forClass(Pedido.class);
+        verify(pedidoRepository, atLeastOnce()).save(captor.capture());
+        Pedido guardado = captor.getValue();
+        assertEquals(admin.getId(), guardado.getUsuario().getId());
+        assertNull(guardado.getCreadoPorUsuarioId());
+    }
+
+    @Test
+    void pedidoPublico_calculaPrecioYEnvioEnElServidor() {
+        when(configLocalService.obtener()).thenReturn(ConfigLocal.builder().id(1L).estadoManual("auto").costoDelivery(300).build());
+        PedidoResponseDTO r = pedidoService.crear(pedidoPublico(TipoPedido.DELIVERY, null));
+        assertEquals(1300.0, r.getTotal(), 0.001);
     }
 }

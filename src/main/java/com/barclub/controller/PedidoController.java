@@ -109,13 +109,11 @@ public class PedidoController {
         return ResponseEntity.ok(pedidoService.cancelar(id));
     }
 
-    @DeleteMapping("/entregados/hoy")
-    @Operation(summary = "Eliminar pedidos entregados de hoy", description = "Borra todos los pedidos con estado ENTREGADO del día actual junto con sus ventas.")
-    @ApiResponse(responseCode = "204", description = "Pedidos eliminados")
-    public ResponseEntity<Void> eliminarEntregadosHoy() {
-        pedidoService.eliminarEntregadosHoy();
-        return ResponseEntity.noContent().build();
-    }
+    // (Se quitó DELETE /entregados/hoy: borraba los pedidos entregados del
+    // día JUNTO CON SUS VENTAS, y estaba habilitado para el cajero — o sea,
+    // un cajero podía hacer desaparecer las ventas del día aunque borrar
+    // ventas es solo del admin. El panel no lo usaba. Para borrar ventas está
+    // DELETE /api/ventas/..., que es solo del admin y deja los pedidos bien.)
 
     @PostMapping("/{id}/detalles")
     @Operation(summary = "Agregar producto a pedido existente", description = "Funciona en pedidos PENDIENTE o PREPARACION.")

@@ -60,12 +60,27 @@ public class PedidoService {
             }
         }
         // Esquema viejo (Media/Entera fijo, de antes del sistema de variantes libres)
-        if ("Entera".equalsIgnoreCase(variante.trim()) && producto.getPrecioEntera() != null && producto.getPrecioEntera() > 0) {
+        boolean tieneEsquemaViejo = producto.getPrecioEntera() != null && producto.getPrecioEntera() > 0;
+        if (tieneEsquemaViejo && "Entera".equalsIgnoreCase(variante.trim())) {
             return producto.getPrecioEntera();
         }
-        // No es una variante de precio (ej. elección de salsa/acompañamiento
-        // que no cambia el precio) — se cobra el precio base, como siempre.
-        return producto.getPrecio();
+        if (tieneEsquemaViejo && "Media".equalsIgnoreCase(variante.trim())) {
+            return producto.getPrecio();
+        }
+        // Elección de acompañamiento/salsa (marcada en la descripción del
+        // producto como [acomp...]): no cambia el precio, se cobra el base.
+        if (producto.getDescripcion() != null && producto.getDescripcion().contains("[acomp")) {
+            if (variante.trim().length() > 60) {
+                throw new BusinessException("La opción elegida es demasiado larga.");
+            }
+            return producto.getPrecio();
+        }
+        // Si el producto no tiene opciones cargadas, no se acepta una opción
+        // inventada: antes cualquier texto (ej. "Gigante gratis") pasaba y
+        // aparecía tal cual en la comanda de cocina. (Si las variantes
+        // cargadas no se pudieron leer, arriba ya se cobró el precio base.)
+        throw new BusinessException("'" + producto.getNombre() + "' no tiene la opción '" + variante.trim()
+                + "'. Volvé a elegirlo desde el menú actualizado.");
     }
 
     // Anti-duplicación: rechaza un pedido idéntico repetido en pocos segundos
@@ -124,6 +139,23 @@ public class PedidoService {
         return usuarioRepository.findByEmail(auth.getName()).orElse(null);
     }
 
+    private boolean tieneRol(String rol) {
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream().anyMatch(a -> ("ROLE_" + rol).equals(a.getAuthority()));
+    }
+
+    // El mozo solo recibe SUS pedidos (los que cargó él). Antes el filtro era
+    // solo visual en el panel: el servidor le mandaba todos los pedidos, con
+    // teléfono y dirección de los clientes de delivery incluidos.
+    private List<Pedido> filtrarParaMozo(List<Pedido> pedidos) {
+        if (!tieneRol("MOZO")) return pedidos;
+        Usuario yo = usuarioAutenticadoActual();
+        if (yo == null) return List.of();
+        return pedidos.stream()
+                .filter(p -> yo.getId().equals(p.getCreadoPorUsuarioId()))
+                .collect(Collectors.toList());
+    }
+
     // Un Mozo solo puede tocar los pedidos de sus propias mesas — nunca los
     // de otro mozo. Admin y Cajero pueden editar cualquiera, como siempre.
     private void verificarPuedeEditar(Pedido pedido) {
@@ -139,28 +171,56 @@ public class PedidoService {
 
     @Transactional(readOnly = true)
     public List<PedidoResponseDTO> listarTodos() {
-        return pedidoRepository.findAll().stream().map(this::toDTO).collect(Collectors.toList());
+        return filtrarParaMozo(pedidoRepository.findAll()).stream().map(this::toDTO).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public List<PedidoResponseDTO> listarActivos() {
-        return pedidoRepository.findPedidosActivos().stream().map(this::toDTO).collect(Collectors.toList());
+        return filtrarParaMozo(pedidoRepository.findPedidosActivos()).stream().map(this::toDTO).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public List<PedidoResponseDTO> listarPorEstado(EstadoPedido estado) {
-        return pedidoRepository.findByEstado(estado).stream().map(this::toDTO).collect(Collectors.toList());
+        return filtrarParaMozo(pedidoRepository.findByEstado(estado)).stream().map(this::toDTO).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public List<PedidoResponseDTO> listarPorFecha(LocalDate fecha) {
-        return pedidoRepository.findByFecha(fecha).stream().map(this::toDTO).collect(Collectors.toList());
+        return filtrarParaMozo(pedidoRepository.findByFecha(fecha)).stream().map(this::toDTO).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public PedidoResponseDTO obtenerPorId(Long id) {
-        return toDTO(pedidoRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Pedido", id)));
+        Pedido p = pedidoRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Pedido", id));
+        if (filtrarParaMozo(List.of(p)).isEmpty()) throw new ResourceNotFoundException("Pedido", id);
+        return toDTO(p);
+    }
+
+    private void validarReglasDelLocal(PedidoRequestDTO dto) {
+        com.barclub.entity.ConfigLocal cfg = configLocalService.obtener();
+        if ("close".equalsIgnoreCase(cfg.getEstadoManual())) {
+            throw new BusinessException("El local está cerrado en este momento. Podés ver la carta, pero no hacer pedidos.");
+        }
+        if (dto.getTipo() == TipoPedido.DELIVERY && Boolean.FALSE.equals(cfg.getAceptaDelivery())) {
+            throw new BusinessException("El delivery no está disponible en este momento.");
+        }
+        if (dto.getTipo() == TipoPedido.RETIRO && Boolean.FALSE.equals(cfg.getAceptaRetiro())) {
+            throw new BusinessException("El retiro en el local no está disponible en este momento.");
+        }
+        com.barclub.entity.MetodoPago mp = dto.getMetodoPagoPreferido();
+        if (mp != null) {
+            // El delivery no se paga con tarjeta (el repartidor no lleva posnet),
+            // igual que lo que ya mostraba la web.
+            if (dto.getTipo() == TipoPedido.DELIVERY && mp == com.barclub.entity.MetodoPago.TARJETA) {
+                throw new BusinessException("El delivery no se puede pagar con tarjeta. Elegí efectivo o transferencia.");
+            }
+            String aceptados = cfg.getPagosAceptados();
+            if (aceptados != null && !aceptados.isBlank()
+                    && java.util.Arrays.stream(aceptados.split(",")).map(String::trim).noneMatch(mp.name()::equalsIgnoreCase)) {
+                throw new BusinessException("Ese medio de pago no está disponible.");
+            }
+        }
     }
 
     public PedidoResponseDTO crear(PedidoRequestDTO dto) {
@@ -168,29 +228,32 @@ public class PedidoService {
                 dto.getTipo(), dto.getUsuarioId(), dto.getNombreCliente(),
                 dto.getDetalles() != null ? dto.getDetalles().size() : 0);
 
-        // Los pedidos de la página pública no pertenecen a ningún empleado, pero el
-        // sistema necesita asociarlos a un usuario. Si el indicado no existe (por
-        // ejemplo, si ese usuario fue eliminado), usamos cualquier admin disponible
-        // en lugar de rechazar el pedido: un cliente no debe quedarse sin pedir por
-        // un cambio interno de usuarios.
-        Usuario usuario = (dto.getUsuarioId() == null)
-                ? null
-                : usuarioRepository.findById(dto.getUsuarioId()).orElse(null);
-        if (usuario == null) {
-            usuario = usuarioRepository.findAll().stream()
-                    .filter(u -> u.getRol() == Rol.ADMIN)
-                    .findFirst()
-                    .orElseGet(() -> usuarioRepository.findAll().stream().findFirst()
-                            .orElseThrow(() -> new BusinessException(
-                                    "No hay usuarios cargados en el sistema")));
-            logger.warn("Pedido recibido con usuarioId={} inexistente. Se asigna a {}",
-                    dto.getUsuarioId(), usuario.getEmail());
-        }
+        // A quién queda asignado el pedido: SIEMPRE al usuario que inició
+        // sesión (mozo, cajero, admin). El usuarioId que venga en el cuerpo se
+        // ignora: antes se confiaba en él, y así un mozo podía cargar un
+        // delivery poniendo el id del admin, o la página pública podía
+        // asignarle el pedido a cualquier empleado.
+        // Los pedidos de la página pública (sin sesión) van al primer admin
+        // activo: el sistema necesita asociarlos a un usuario.
+        Usuario autenticado = usuarioAutenticadoActual();
+        boolean esPublico = (autenticado == null);
+        Usuario usuario = esPublico
+                ? usuarioRepository.findAll().stream()
+                        .filter(u -> u.getRol() == Rol.ADMIN && u.estaActivo())
+                        .findFirst()
+                        .orElseGet(() -> usuarioRepository.findAll().stream().filter(Usuario::estaActivo).findFirst()
+                                .orElseThrow(() -> new BusinessException("No hay usuarios cargados en el sistema")))
+                : autenticado;
 
         // El rol MOZO solo puede registrar pedidos de mesa (LOCAL)
         if (usuario.getRol() == Rol.MOZO && dto.getTipo() != TipoPedido.LOCAL) {
             throw new BusinessException("El rol MOZO solo puede registrar pedidos de tipo LOCAL (mesa)");
         }
+
+        // Reglas del local para los pedidos de la página pública. Antes solo
+        // las controlaba la web: una pestaña abierta desde antes de cambiar la
+        // configuración (o un pedido mandado directo al servidor) pasaba igual.
+        if (esPublico) validarReglasDelLocal(dto);
 
         // Todo pedido tiene que poder identificarse a la hora de entregarlo.
         // En retiro y delivery hace falta el nombre; en el local alcanza con la mesa.
@@ -229,7 +292,7 @@ public class PedidoService {
         // mande el cuerpo del pedido — igual que con los precios, nunca se
         // confía en un dato que podría venir manipulado desde afuera. Los
         // pedidos de la página pública (sin login) quedan sin dueño (null).
-        Usuario creadoPor = usuarioAutenticadoActual();
+        Usuario creadoPor = autenticado;
 
         Pedido pedido = Pedido.builder()
                 .fecha(LocalDate.now())
@@ -329,6 +392,12 @@ public class PedidoService {
         if (nuevoEstado == EstadoPedido.ENTREGADO) {
             throw new BusinessException("El pedido se marca como entregado al cobrarlo, no por este medio.");
         }
+        // Cancelar tiene su propio endpoint (/cancelar), que solo pueden usar
+        // admin y cajero. Antes este endpoint también aceptaba CANCELADO, y como
+        // cocina sí puede cambiar estados, cocina podía cancelar pedidos.
+        if (nuevoEstado == EstadoPedido.CANCELADO) {
+            throw new BusinessException("Para cancelar un pedido usá el botón Cancelar.");
+        }
         validarTransicionEstado(estadoAnterior, nuevoEstado);
 
         pedido.setEstado(nuevoEstado);
@@ -384,19 +453,6 @@ public class PedidoService {
         return resultado;
     }
 
-    public void eliminarEntregadosHoy() {
-        List<Pedido> entregados = pedidoRepository.findByFecha(LocalDate.now())
-                .stream()
-                .filter(p -> p.getEstado() == EstadoPedido.ENTREGADO)
-                .collect(Collectors.toList());
-
-        logger.info("LIMPIEZA DIARIA: eliminando {} pedidos entregados de hoy", entregados.size());
-
-        for (Pedido p : entregados) {
-            ventaRepository.findByPedidoId(p.getId()).ifPresent(ventaRepository::delete);
-            pedidoRepository.delete(p);
-        }
-    }
 
     private boolean esEditable(EstadoPedido estado) {
         // Se puede seguir editando (productos y datos del cliente) mientras
@@ -421,7 +477,13 @@ public class PedidoService {
         // contra la base, buscando coincidencia por nombre en las variantes
         // reales del producto (sistema nuevo, nombre libre), con
         // compatibilidad para el esquema viejo fijo de Media/Entera.
-        String variante = detalleDTO.getVariante();
+        if (!Boolean.TRUE.equals(producto.getActivo())) {
+            throw new BusinessException("El producto '" + producto.getNombre() + "' no está disponible");
+        }
+        // Misma normalización que al crear el pedido: sin esto "Media" y " Media"
+        // (o "" y null) quedaban como dos líneas distintas del mismo plato.
+        String variante = (detalleDTO.getVariante() != null && !detalleDTO.getVariante().isBlank())
+                ? detalleDTO.getVariante().trim() : null;
         double precio = resolverPrecioVariante(producto, variante);
 
         logger.info("AGREGAR DETALLE: pedidoId={}, productoId={}, variante={}, cantidad={}",
@@ -449,6 +511,9 @@ public class PedidoService {
                                     .cantidad(detalleDTO.getCantidad())
                                     .variante(variante)
                                     .precioUnitario(precio)
+                                    // Costo congelado igual que en un pedido nuevo: antes
+                                    // quedaba vacío y la ganancia del informe salía mal.
+                                    .costoUnitario(producto.getCosto())
                                     .subtotal(precio * detalleDTO.getCantidad())
                                     .build();
                             pedido.getDetalles().add(nuevo);
@@ -537,9 +602,13 @@ public class PedidoService {
         return resultado;
     }
 
+    // Total = productos + costo de envío. Antes sumaba solo los productos, así
+    // que editar un delivery (agregar/sacar algo o cambiar una cantidad) le
+    // borraba el envío del total aunque el pedido seguía mostrando "envío $X".
     private void recalcularTotal(Pedido pedido) {
-        double total = pedido.getDetalles().stream().mapToDouble(DetallePedido::getSubtotal).sum();
-        pedido.setTotal(total);
+        double productos = pedido.getDetalles().stream().mapToDouble(DetallePedido::getSubtotal).sum();
+        double envio = pedido.getCostoEnvio() != null ? pedido.getCostoEnvio() : 0.0;
+        pedido.setTotal(productos + envio);
     }
 
     private void validarTransicionEstado(EstadoPedido actual, EstadoPedido nuevo) {
@@ -605,7 +674,6 @@ public class PedidoService {
                 .detalleSnapshotAntesEdicion(p.getDetalleSnapshotAntesEdicion())
                 .metodoPagoPreferido(p.getMetodoPagoPreferido())
                 .cliente(p.getCliente() != null ? clienteService.toDTO(p.getCliente()) : null)
-                .usuario(p.getUsuario() != null ? usuarioService.toDTO(p.getUsuario()) : null)
                 .detalles(detalles)
                 .cancelable(esCancelable(p))
                 .build();

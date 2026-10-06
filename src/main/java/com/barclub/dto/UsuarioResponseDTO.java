@@ -15,4 +15,6 @@ public class UsuarioResponseDTO {
     private String nombre;
     private String email;
     private Rol rol;
+    // false = desactivado (no puede iniciar sesión; su historial se conserva)
+    private boolean activo;
 }

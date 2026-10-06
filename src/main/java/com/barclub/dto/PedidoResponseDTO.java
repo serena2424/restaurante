@@ -38,7 +38,6 @@ public class PedidoResponseDTO {
     private LocalTime horarioEntrega;
     private MetodoPago metodoPagoPreferido;
     private ClienteResponseDTO cliente;
-    private UsuarioResponseDTO usuario;
     private List<DetallePedidoResponseDTO> detalles;
     private boolean cancelable;
 }

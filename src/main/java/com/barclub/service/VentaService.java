@@ -122,7 +122,11 @@ public class VentaService {
         if (desde == null || hasta == null) throw new BusinessException("Indicá las fechas del informe");
         if (hasta.isBefore(desde)) throw new BusinessException("La fecha final no puede ser anterior a la inicial");
 
-        List<Venta> ventas = ventaRepository.findEntreFechas(desde, hasta);
+        // Por JORNADA (el día de trabajo), igual que Movimientos: antes el
+        // informe agrupaba por fecha de calendario y una venta de las 2am de
+        // una caja abierta la noche anterior caía en otro día que en
+        // Movimientos, así que los totales no coincidían.
+        List<Venta> ventas = ventaRepository.findEntreJornadas(desde, hasta);
 
         double total = ventas.stream().mapToDouble(v -> v.getTotal() != null ? v.getTotal() : 0.0).sum();
 
@@ -139,7 +143,7 @@ public class VentaService {
 
         // Ranking de productos
         List<Map<String, Object>> productos = new ArrayList<>();
-        for (Object[] f : ventaRepository.rankingProductos(desde, hasta)) {
+        for (Object[] f : ventaRepository.rankingProductosPorJornada(desde, hasta)) {
             Map<String, Object> m = new HashMap<>();
             m.put("nombre", f[0]);
             m.put("categoria", f[1]);
@@ -186,6 +190,11 @@ public class VentaService {
     }
 
     public Map<String, Object> cerrarCaja() {
+        // Un segundo "Cerrar caja" seguido (doble clic, o dos dispositivos a la
+        // vez) creaba otra caja vacía de $0 en el historial.
+        if (Boolean.FALSE.equals(configLocalService.obtener().getCajaAbierta())) {
+            throw new BusinessException("La caja ya está cerrada.");
+        }
         List<VentaResponseDTO> ventas = listarDesdeCierre();
         double total = ventas.stream()
                 .mapToDouble(v -> v.getTotal() != null ? v.getTotal() : 0.0).sum();
@@ -222,6 +231,16 @@ public class VentaService {
     // caja solo habilita de nuevo el cobro.
     public void abrirCaja() {
         ConfigLocal cfg = configLocalService.obtener();
+        if (!Boolean.FALSE.equals(cfg.getCajaAbierta())) {
+            throw new BusinessException("La caja ya está abierta.");
+        }
+        // La caja nueva empieza AHORA. Antes se dejaba como inicio el momento
+        // del último cierre: si se cerraba el lunes 23:00 y se abría el martes
+        // 10:00, la caja "empezaba" el lunes y las ventas de la mañana del
+        // martes (dentro de las 24 h) se contaban en la jornada del lunes.
+        // Como con la caja cerrada no se puede cobrar, entre el cierre y la
+        // apertura no hay ventas que se pierdan.
+        cfg.setCierreCaja(LocalDateTime.now().withNano(0).toString());
         cfg.setCajaAbierta(true);
         configLocalService.guardar(cfg);
     }

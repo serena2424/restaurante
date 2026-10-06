@@ -98,6 +98,20 @@ public class UsuarioController {
         return ResponseEntity.ok(usuarioService.actualizar(id, dto));
     }
 
+    @GetMapping("/me")
+    @Operation(summary = "Usuario de la sesión actual", description = "Lo usa el panel para retomar la sesión al recargar la página (cualquier rol).")
+    public ResponseEntity<UsuarioResponseDTO> yo(java.security.Principal principal) {
+        return usuarioService.porEmail(principal.getName())
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+    }
+
+    @PatchMapping("/{id}/reactivar")
+    @Operation(summary = "Reactivar un usuario desactivado")
+    public ResponseEntity<UsuarioResponseDTO> reactivar(@PathVariable Long id) {
+        return ResponseEntity.ok(usuarioService.reactivar(id));
+    }
+
     @DeleteMapping("/{id}")
     @Operation(summary = "Eliminar usuario")
     @ApiResponse(responseCode = "204", description = "Usuario eliminado")
