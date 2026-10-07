@@ -98,6 +98,9 @@ public class PedidoService {
         boolean esPublico = autenticado == null;
         Usuario responsable = esPublico ? primerAdminActivo() : autenticado;
 
+        if (!esPublico && responsable.getRol() == Rol.COCINA) {
+            throw new BusinessException("Cocina no carga pedidos.");
+        }
         if (responsable.getRol() == Rol.MOZO && dto.getTipo() != TipoPedido.LOCAL) {
             throw new BusinessException("El mozo solo puede cargar pedidos de mesa.");
         }
@@ -109,8 +112,14 @@ public class PedidoService {
         }
         validarIdentificacion(dto, mesa);
 
-        if (envioDuplicado.esRepetido(firma(dto))) {
+        if (envioDuplicado.esRepetido(firma(dto, autenticado))) {
             throw new BusinessException("Ya recibimos este pedido hace unos segundos. Esperá un momento antes de reenviarlo.");
+        }
+
+        boolean comandaDeMesa = !esPublico && dto.getTipo() == TipoPedido.LOCAL && mesa != null;
+        if (comandaDeMesa) {
+            Optional<Pedido> abierta = pedidoRepository.findComandasAbiertasDeMesa(mesa).stream().findFirst();
+            if (abierta.isPresent()) return sumarAComandaAbierta(abierta.get(), dto, responsable);
         }
 
         Pedido pedido = Pedido.builder()
@@ -127,6 +136,7 @@ public class PedidoService {
                 .horarioEntrega(dto.getHorarioEntrega())
                 .mesa(mesa)
                 .metodoPagoPreferido(dto.getMetodoPagoPreferido())
+                .porTarjetas(comandaDeMesa ? Boolean.TRUE : null)
                 .build();
 
         if (dto.getClienteId() != null) {
@@ -134,15 +144,20 @@ public class PedidoService {
                     .orElseThrow(() -> new ResourceNotFoundException("Cliente", dto.getClienteId())));
         }
 
-        for (DetallePedidoRequestDTO item : dto.getDetalles()) {
-            Producto producto = productoActivo(item.getProductoId());
-            String variante = normalizarVariante(item.getVariante());
-            double precio = precioDe(producto, variante);
-            pedido.getDetalles().add(nuevoDetalle(pedido, producto, variante, precio, item.getCantidad()));
+        if (comandaDeMesa) {
+            agregarTarjetas(pedido, dto.getDetalles());
+        } else {
+            for (DetallePedidoRequestDTO item : dto.getDetalles()) {
+                Producto producto = productoActivo(item.getProductoId());
+                String variante = normalizarVariante(item.getVariante());
+                double precio = precioDe(producto, variante);
+                pedido.getDetalles().add(nuevoDetalle(pedido, producto, variante, precio, item.getCantidad()));
+            }
         }
 
         pedido.setCostoEnvio(dto.getTipo() == TipoPedido.DELIVERY ? costoEnvioActual() : 0.0);
         recalcularTotal(pedido);
+        ComandaMesa.recalcularEstado(pedido, LocalDateTime.now(clock));
 
         Pedido guardado = pedidoRepository.save(pedido);
         logger.info("Pedido #{} creado: {} por ${}", guardado.getId(), guardado.getTipo(), guardado.getTotal());
@@ -156,6 +171,9 @@ public class PedidoService {
      */
     public PedidoResponseDTO cambiarEstado(Long id, EstadoPedido nuevoEstado) {
         Pedido pedido = buscar(id);
+        if (pedido.esComandaPorTarjetas()) {
+            throw new BusinessException("Esta mesa se maneja por tarjetas: cambiá el estado de cada plato.");
+        }
         if (nuevoEstado == EstadoPedido.CANCELADO) {
             throw new BusinessException("Para cancelar un pedido usá el botón Cancelar.");
         }
@@ -179,6 +197,13 @@ public class PedidoService {
 
     public PedidoResponseDTO cancelar(Long id) {
         Pedido pedido = buscar(id);
+        verificarPuedeEditar(pedido);
+        if (tieneRol(Rol.MOZO) || tieneRol(Rol.COCINA)) {
+            if (!pedido.esComandaPorTarjetas()) throw new BusinessException("Este pedido lo cancela el cajero.");
+            if (pedido.getDetalles().stream().anyMatch(d -> d.getEstado() == EstadoPedido.ENTREGADO)) {
+                throw new BusinessException("Esta mesa ya tiene platos entregados. Sacá lo que no quieran o pedile al cajero que la cancele.");
+            }
+        }
         if (pedido.getEstado() == EstadoPedido.CANCELADO) {
             throw new BusinessException("El pedido ya está cancelado");
         }
@@ -196,6 +221,12 @@ public class PedidoService {
 
     public PedidoResponseDTO agregarDetalle(Long pedidoId, DetallePedidoRequestDTO item) {
         Pedido pedido = buscarEditable(pedidoId);
+        if (pedido.esComandaPorTarjetas()) {
+            agregarTarjetas(pedido, List.of(item));
+            recalcularTotal(pedido);
+            ComandaMesa.recalcularEstado(pedido, LocalDateTime.now(clock));
+            return guardarYAvisar(pedido);
+        }
         Producto producto = productoActivo(item.getProductoId());
         String variante = normalizarVariante(item.getVariante());
         double precio = precioDe(producto, variante);
@@ -216,6 +247,18 @@ public class PedidoService {
     /** Cambia la cantidad de una línea. Con 0 o menos, la línea se quita. */
     public PedidoResponseDTO cambiarCantidadDetalle(Long pedidoId, Long detalleId, int nuevaCantidad) {
         Pedido pedido = buscarEditable(pedidoId);
+        if (pedido.esComandaPorTarjetas()) {
+            if (nuevaCantidad <= 0) return cancelarTarjeta(pedidoId, detalleId);
+            DetallePedido tarjeta = tarjeta(pedido, detalleId);
+            if (tarjeta.estaCancelada()) throw new BusinessException("Ese plato está cancelado. Si lo quieren, agregalo de nuevo.");
+            if (tarjeta.getEstado() != EstadoPedido.PENDIENTE && tarjeta.getEstado() != EstadoPedido.PREPARACION) {
+                throw new BusinessException("Ese plato ya está listo o entregado. Si piden más, agregalo como uno nuevo.");
+            }
+            actualizarCantidad(tarjeta, nuevaCantidad);
+            tarjeta.setModificadoEn(LocalDateTime.now(clock));
+            recalcularTotal(pedido);
+            return guardarYAvisar(pedido);
+        }
         capturarSnapshotSiHaceFalta(pedido);
         if (nuevaCantidad <= 0) {
             pedido.getDetalles().removeIf(d -> d.getId().equals(detalleId));
@@ -230,10 +273,143 @@ public class PedidoService {
     }
 
     public PedidoResponseDTO eliminarDetalle(Long pedidoId, Long detalleId) {
+        if (buscar(pedidoId).esComandaPorTarjetas()) return cancelarTarjeta(pedidoId, detalleId);
         Pedido pedido = buscarEditable(pedidoId);
         capturarSnapshotSiHaceFalta(pedido);
         pedido.getDetalles().removeIf(d -> d.getId().equals(detalleId));
         return guardarEdicion(pedido);
+    }
+
+    /**
+     * Avanza una tarjeta de una comanda de mesa. Cocina: NUEVO → En preparación
+     * → Listo (y Listo puede volver a preparación). Mozo: Listo → Entregado, y
+     * las bebidas de NUEVO a Entregado. Cajero y admin pueden todo.
+     */
+    public PedidoResponseDTO cambiarEstadoTarjeta(Long pedidoId, Long detalleId, EstadoPedido nuevo) {
+        Pedido pedido = buscarComanda(pedidoId);
+        verificarPuedeEditar(pedido);
+        DetallePedido tarjeta = tarjeta(pedido, detalleId);
+        if (nuevo == EstadoPedido.CANCELADO) return cancelarTarjeta(pedidoId, detalleId);
+        if (pedido.getEstado() == EstadoPedido.CANCELADO) throw new BusinessException("La comanda está cancelada.");
+
+        EstadoPedido actual = tarjeta.getEstado();
+        if (actual == null) throw new BusinessException("Ese producto no es una tarjeta de la comanda.");
+        boolean cierreDeMesaCobrada = pedido.estaPagado() && nuevo == EstadoPedido.ENTREGADO
+                && actual != EstadoPedido.ENTREGADO && actual != EstadoPedido.CANCELADO
+                && (tieneRol(Rol.ADMIN) || tieneRol(Rol.CAJERO));
+        boolean valido = cierreDeMesaCobrada || (tarjeta.pasaPorCocina()
+                ? switch (actual) {
+                    case PENDIENTE -> nuevo == EstadoPedido.PREPARACION;
+                    case PREPARACION -> nuevo == EstadoPedido.LISTO;
+                    case LISTO -> nuevo == EstadoPedido.PREPARACION || nuevo == EstadoPedido.ENTREGADO;
+                    case ENTREGADO, CANCELADO -> false;
+                }
+                : actual == EstadoPedido.PENDIENTE && nuevo == EstadoPedido.ENTREGADO);
+        if (!valido) {
+            throw new BusinessException("Ese plato no puede pasar de " + nombreEstado(actual) + " a " + nombreEstado(nuevo) + ".");
+        }
+        boolean entrega = nuevo == EstadoPedido.ENTREGADO;
+        if (tieneRol(Rol.COCINA) && entrega) {
+            throw new BusinessException("Cocina lo marca como listo; lo entrega el mozo.");
+        }
+        if (tieneRol(Rol.MOZO) && !entrega) {
+            throw new BusinessException("Los estados de cocina los cambia cocina.");
+        }
+
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        tarjeta.setEstado(nuevo);
+        tarjeta.setEstadoEn(ahora);
+        if (nuevo == EstadoPedido.LISTO) tarjeta.setModificadoEn(null);
+        ComandaMesa.recalcularEstado(pedido, ahora);
+        logger.info("Mesa {} (pedido #{}), tarjeta {}: {} -> {}", pedido.getMesa(), pedidoId, detalleId, actual, nuevo);
+        return guardarYAvisar(pedido);
+    }
+
+    /**
+     * Saca un plato de la comanda: queda tachado y deja de sumar. Si ya estaba
+     * entregado, solo lo puede sacar el cajero o el admin.
+     */
+    public PedidoResponseDTO cancelarTarjeta(Long pedidoId, Long detalleId) {
+        Pedido pedido = buscarComanda(pedidoId);
+        verificarPuedeEditar(pedido);
+        DetallePedido tarjeta = tarjeta(pedido, detalleId);
+        if (pedido.estaPagado()) {
+            throw new BusinessException("La mesa ya está cobrada. Para sacar un plato, primero el admin tiene que anular el cobro.");
+        }
+        if (pedido.getEstado() == EstadoPedido.CANCELADO) throw new BusinessException("La comanda ya está cancelada.");
+        if (tarjeta.estaCancelada()) throw new BusinessException("Ese plato ya está cancelado.");
+        if (tarjeta.getEstado() == EstadoPedido.ENTREGADO && !tieneRol(Rol.ADMIN) && !tieneRol(Rol.CAJERO)) {
+            throw new BusinessException("Ese plato ya se entregó. Para sacarlo de la cuenta, pedíselo al cajero.");
+        }
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        tarjeta.setEstado(EstadoPedido.CANCELADO);
+        tarjeta.setEstadoEn(ahora);
+        recalcularTotal(pedido);
+        ComandaMesa.recalcularEstado(pedido, ahora);
+        logger.info("Mesa {} (pedido #{}): tarjeta {} cancelada", pedido.getMesa(), pedidoId, detalleId);
+        return guardarYAvisar(pedido);
+    }
+
+    /** Suma lo que cargó el mozo a la comanda abierta de esa mesa, como tarjetas nuevas. */
+    private PedidoResponseDTO sumarAComandaAbierta(Pedido comanda, PedidoRequestDTO dto, Usuario responsable) {
+        if (responsable.getRol() == Rol.MOZO && !esDelMozo(comanda, responsable, idsDeMozos())) {
+            String quien = comanda.getCreadoPorNombre() != null ? comanda.getCreadoPorNombre() : "otro mozo";
+            throw new BusinessException("La mesa " + comanda.getMesa() + " la atiende " + quien
+                    + ". Que lo cargue " + quien + " o el cajero.");
+        }
+        agregarTarjetas(comanda, dto.getDetalles());
+        recalcularTotal(comanda);
+        ComandaMesa.recalcularEstado(comanda, LocalDateTime.now(clock));
+        Pedido guardado = pedidoRepository.save(comanda);
+        logger.info("Mesa {}: {} producto(s) más en la comanda #{}", comanda.getMesa(), dto.getDetalles().size(), guardado.getId());
+        realtimeNotifier.avisarPedidos();
+        PedidoResponseDTO respuesta = toDTO(guardado);
+        respuesta.setAgregadoAMesaAbierta(true);
+        return respuesta;
+    }
+
+    /** Cada producto es una tarjeta nueva, aunque ya haya uno igual en la mesa. */
+    private void agregarTarjetas(Pedido pedido, List<DetallePedidoRequestDTO> items) {
+        String sinCocina = configLocalService.obtener().getCategoriasSinCocina();
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        for (DetallePedidoRequestDTO item : items) {
+            Producto producto = productoActivo(item.getProductoId());
+            String variante = normalizarVariante(item.getVariante());
+            if (item.getCantidad() != null && item.getCantidad() > CANTIDAD_MAXIMA) {
+                throw new BusinessException("La cantidad máxima por producto es " + CANTIDAD_MAXIMA + ".");
+            }
+            DetallePedido tarjeta = nuevoDetalle(pedido, producto, variante, precioDe(producto, variante), item.getCantidad());
+            tarjeta.setEstado(EstadoPedido.PENDIENTE);
+            tarjeta.setVaACocina(ComandaMesa.categoriaVaACocina(producto.getCategoria(), sinCocina));
+            tarjeta.setCreadoEn(ahora);
+            tarjeta.setEstadoEn(ahora);
+            pedido.getDetalles().add(tarjeta);
+        }
+    }
+
+    private Pedido buscarComanda(Long id) {
+        Pedido pedido = buscar(id);
+        if (!pedido.esComandaPorTarjetas()) {
+            throw new BusinessException("Este pedido no es una comanda de mesa por tarjetas.");
+        }
+        return pedido;
+    }
+
+    private static DetallePedido tarjeta(Pedido pedido, Long detalleId) {
+        return pedido.getDetalles().stream()
+                .filter(d -> d.getId() != null && d.getId().equals(detalleId))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Plato de la comanda", detalleId));
+    }
+
+    private static String nombreEstado(EstadoPedido estado) {
+        return switch (estado) {
+            case PENDIENTE -> "nuevo";
+            case PREPARACION -> "en preparación";
+            case LISTO -> "listo";
+            case ENTREGADO -> "entregado";
+            case CANCELADO -> "cancelado";
+        };
     }
 
     /** Corrige nombre, teléfono, dirección o mesa. Solo cambia lo que viene con valor. */
@@ -244,6 +420,13 @@ public class PedidoService {
         if (dto.getDireccionEntrega() != null) pedido.setDireccionEntrega(dto.getDireccionEntrega());
         if (dto.getMesa() != null) {
             String mesa = normalizarMesa(dto.getMesa());
+            if (pedido.esComandaPorTarjetas() && mesa != null && !mesa.equals(pedido.getMesa())
+                    && !pedidoRepository.findComandasAbiertasDeMesa(mesa).isEmpty()) {
+                throw new BusinessException("La mesa " + mesa + " ya tiene una comanda abierta.");
+            }
+            if (pedido.esComandaPorTarjetas() && mesa == null) {
+                throw new BusinessException("Falta el número de mesa.");
+            }
             if (mesa == null && pedido.getTipo() == TipoPedido.LOCAL
                     && (pedido.getNombreCliente() == null || pedido.getNombreCliente().isBlank())) {
                 throw new BusinessException("Falta el número de mesa.");
@@ -370,7 +553,25 @@ public class PedidoService {
         if (!tieneRol(Rol.MOZO)) return pedidos;
         Usuario yo = usuarioAutenticado();
         if (yo == null) return List.of();
-        return pedidos.stream().filter(p -> yo.getId().equals(p.getCreadoPorUsuarioId())).toList();
+        Set<Long> mozos = idsDeMozos();
+        return pedidos.stream().filter(p -> esDelMozo(p, yo, mozos)).toList();
+    }
+
+    /**
+     * El mozo ve y maneja lo que cargó él y, en las comandas de mesa, también
+     * las que abrió el cajero o el admin (no las de otro mozo).
+     */
+    private static boolean esDelMozo(Pedido pedido, Usuario mozo, Set<Long> idsDeMozos) {
+        Long creador = pedido.getCreadoPorUsuarioId();
+        if (mozo.getId().equals(creador)) return true;
+        return pedido.esComandaPorTarjetas() && creador != null && !idsDeMozos.contains(creador);
+    }
+
+    private Set<Long> idsDeMozos() {
+        return usuarioRepository.findAll().stream()
+                .filter(u -> u.getRol() == Rol.MOZO)
+                .map(Usuario::getId)
+                .collect(Collectors.toSet());
     }
 
     private List<Pedido> canceladosRecientes(List<Pedido> cancelados) {
@@ -384,7 +585,7 @@ public class PedidoService {
     private void verificarPuedeEditar(Pedido pedido) {
         if (!tieneRol(Rol.MOZO)) return;
         Usuario yo = usuarioAutenticado();
-        if (yo == null || !yo.getId().equals(pedido.getCreadoPorUsuarioId())) {
+        if (yo == null || !esDelMozo(pedido, yo, idsDeMozos())) {
             throw new BusinessException("Solo podés editar los pedidos de tus propias mesas.");
         }
     }
@@ -415,6 +616,15 @@ public class PedidoService {
     private Pedido buscarEditable(Long id) {
         Pedido pedido = buscar(id);
         verificarPuedeEditar(pedido);
+        if (pedido.esComandaPorTarjetas()) {
+            if (pedido.estaPagado()) {
+                throw new BusinessException("La mesa ya está cobrada. Si piden algo más, cargalo y se abre una cuenta nueva.");
+            }
+            if (pedido.getEstado() == EstadoPedido.ENTREGADO || pedido.getEstado() == EstadoPedido.CANCELADO) {
+                throw new BusinessException("La comanda de esa mesa ya está cerrada.");
+            }
+            return pedido;
+        }
         if (pedido.getEstado() != EstadoPedido.PENDIENTE && pedido.getEstado() != EstadoPedido.PREPARACION) {
             throw new BusinessException("Solo se pueden modificar pedidos pendientes o en preparación.");
         }
@@ -458,7 +668,9 @@ public class PedidoService {
     }
 
     private static void recalcularTotal(Pedido pedido) {
-        double productos = pedido.getDetalles().stream().mapToDouble(DetallePedido::getSubtotal).sum();
+        double productos = pedido.getDetalles().stream()
+                .filter(d -> !d.estaCancelada())
+                .mapToDouble(DetallePedido::getSubtotal).sum();
         double envio = pedido.getCostoEnvio() != null ? pedido.getCostoEnvio() : 0.0;
         pedido.setTotal(Dinero.alPesoHaciaArriba(productos + envio));
     }
@@ -493,12 +705,13 @@ public class PedidoService {
         return resultado;
     }
 
-    private static String firma(PedidoRequestDTO dto) {
+    private static String firma(PedidoRequestDTO dto, Usuario autenticado) {
         String items = dto.getDetalles().stream()
                 .map(d -> d.getProductoId() + ":" + d.getCantidad() + ":" + Objects.toString(d.getVariante(), ""))
                 .sorted()
                 .collect(Collectors.joining(","));
-        return String.join("|", "PED", String.valueOf(dto.getTipo()),
+        return String.join("|", "PED", autenticado != null ? String.valueOf(autenticado.getId()) : "web",
+                String.valueOf(dto.getTipo()),
                 Objects.toString(dto.getTelefonoCliente(), "").trim(),
                 Objects.toString(dto.getNombreCliente(), "").trim(),
                 Objects.toString(dto.getMesa(), "").trim(),
@@ -517,6 +730,11 @@ public class PedidoService {
                         .precioUnitario(d.getPrecioUnitario())
                         .subtotal(d.getSubtotal())
                         .variante(d.getVariante())
+                        .estado(d.getEstado())
+                        .vaACocina(d.esTarjeta() ? d.pasaPorCocina() : null)
+                        .creadoEn(d.getCreadoEn())
+                        .estadoEn(d.getEstadoEn())
+                        .modificadoEn(d.getModificadoEn())
                         .producto(d.getProducto() != null ? productoService.toDTO(d.getProducto()) : null)
                         .build())
                 .toList();
@@ -547,6 +765,7 @@ public class PedidoService {
                 .metodoPagoCobrado(p.getVenta() != null ? p.getVenta().getMetodoPago() : null)
                 .cliente(p.getCliente() != null ? clienteService.toDTO(p.getCliente()) : null)
                 .detalles(detalles)
+                .porTarjetas(p.esComandaPorTarjetas())
                 .cancelable(activo && !p.estaPagado())
                 .build();
     }

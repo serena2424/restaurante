@@ -95,6 +95,7 @@ public class UsuarioService {
     }
 
     public UsuarioResponseDTO crear(UsuarioRequestDTO dto) {
+        dto.setEmail(normalizarEmail(dto.getEmail()));
         Optional<Usuario> existente = usuarioRepository.findByEmail(dto.getEmail());
         if (existente.isPresent()) {
             throw new BusinessException(existente.get().estaActivo()
@@ -121,9 +122,11 @@ public class UsuarioService {
         Usuario usuario = usuarioRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", id));
 
-        // Si cambia el email, verificar que no esté en uso
-        if (!usuario.getEmail().equals(dto.getEmail())
-                && usuarioRepository.existsByEmail(dto.getEmail())) {
+        dto.setEmail(normalizarEmail(dto.getEmail()));
+        boolean usadoPorOtro = usuarioRepository.findByEmail(dto.getEmail())
+                .filter(otro -> !otro.getId().equals(usuario.getId()))
+                .isPresent();
+        if (usadoPorOtro) {
             throw new BusinessException("El email " + dto.getEmail() + " ya está en uso");
         }
         // No dejar al sistema sin ningún administrador activo por un cambio de rol.
@@ -183,6 +186,11 @@ public class UsuarioService {
     public Optional<UsuarioResponseDTO> porEmail(String email) {
         if (email == null) return Optional.empty();
         return usuarioRepository.findByEmail(email).filter(Usuario::estaActivo).map(this::toDTO);
+    }
+
+    /** Los emails se guardan en minúscula: "Juan@x.com" y "juan@x.com" son el mismo usuario. */
+    static String normalizarEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     public UsuarioResponseDTO toDTO(Usuario u) {

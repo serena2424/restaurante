@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -40,10 +41,21 @@ public class ReservaService {
         return reservaRepository.findAll().stream().map(this::toDTO).toList();
     }
 
-    /** Reservas de hoy, incluidas las canceladas, ordenadas por hora. */
+    /**
+     * Reservas de hoy, incluidas las canceladas, ordenadas por hora. Suma las de
+     * la madrugada siguiente que caen dentro del turno de esta noche.
+     */
     @Transactional(readOnly = true)
     public List<ReservaResponseDTO> listarDeHoy() {
-        return listarPorFecha(LocalDate.now(clock));
+        LocalDate hoy = LocalDate.now(clock);
+        ConfigLocal cfg = configLocalService.obtener();
+        List<Reserva> deHoy = new ArrayList<>(reservaRepository.findByFechaOrderByHoraAsc(hoy));
+        reservaRepository.findByFechaOrderByHoraAsc(hoy.plusDays(1)).stream()
+                .filter(r -> HorarioLocal.turnoDe(cfg, r.getFecha().atTime(r.getHora()))
+                        .map(t -> t.inicio().equals(hoy))
+                        .orElse(false))
+                .forEach(deHoy::add);
+        return deHoy.stream().map(this::toDTO).toList();
     }
 
     /** Reservas confirmadas desde hoy hasta dentro de N días (avisos y recordatorios). */
@@ -143,7 +155,11 @@ public class ReservaService {
 
     private void validar(ReservaRequestDTO dto, Long idEditando) {
         LocalDateTime momento = dto.getFecha().atTime(dto.getHora());
-        if (momento.isBefore(LocalDateTime.now(clock))) {
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        if (momento.isBefore(ahora)) {
+            if (dto.getFecha().equals(ahora.toLocalDate()) && dto.getHora().getHour() < 6 && ahora.getHour() >= 6) {
+                throw new BusinessException("Para después de medianoche elegí la fecha del día siguiente.");
+            }
             throw new BusinessException("No se pueden hacer reservas en una fecha u hora que ya pasó");
         }
 
