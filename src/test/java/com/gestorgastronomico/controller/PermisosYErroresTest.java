@@ -56,8 +56,8 @@ class PermisosYErroresTest {
 
     @Test
     @WithMockUser(roles = "MOZO")
-    void mozo_noPuedeCancelarNiCambiarEstados() throws Exception {
-        mockMvc.perform(patch("/api/pedidos/1/cancelar")).andExpect(status().isForbidden());
+    void mozo_noCambiaElEstadoDeUnPedidoEntero() throws Exception {
+        // Cancelar sí llega al servicio: el mozo cancela sus comandas de mesa (y nada más, lo controla PedidoService).
         mockMvc.perform(patch("/api/pedidos/1/estado").param("estado", "LISTO")).andExpect(status().isForbidden());
     }
 

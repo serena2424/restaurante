@@ -103,6 +103,21 @@ public class PedidoController {
         return ResponseEntity.ok(pedidoService.cambiarCantidadDetalle(pedidoId, detalleId, cantidad));
     }
 
+    @PatchMapping("/{pedidoId}/detalles/{detalleId}/estado")
+    @Operation(summary = "Cambiar el estado de un plato de una comanda de mesa",
+               description = "Cocina: PENDIENTE → PREPARACION → LISTO. Mozo: LISTO → ENTREGADO (bebidas: PENDIENTE → ENTREGADO).")
+    public ResponseEntity<PedidoResponseDTO> cambiarEstadoTarjeta(@PathVariable Long pedidoId,
+                                                                  @PathVariable Long detalleId,
+                                                                  @RequestParam EstadoPedido estado) {
+        return ResponseEntity.ok(pedidoService.cambiarEstadoTarjeta(pedidoId, detalleId, estado));
+    }
+
+    @PatchMapping("/{pedidoId}/detalles/{detalleId}/cancelar")
+    @Operation(summary = "Sacar un plato de una comanda de mesa (queda tachado y no suma)")
+    public ResponseEntity<PedidoResponseDTO> cancelarTarjeta(@PathVariable Long pedidoId, @PathVariable Long detalleId) {
+        return ResponseEntity.ok(pedidoService.cancelarTarjeta(pedidoId, detalleId));
+    }
+
     @PatchMapping("/{id}/datos-cliente")
     @Operation(summary = "Corregir nombre, teléfono, dirección o mesa")
     public ResponseEntity<PedidoResponseDTO> actualizarDatosCliente(@PathVariable Long id,

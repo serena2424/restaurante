@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Compilar y correr las pruebas
+        run: mvn -B verify
+      - name: Guardar el informe de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-jacoco
+          path: target/site/jacoco/

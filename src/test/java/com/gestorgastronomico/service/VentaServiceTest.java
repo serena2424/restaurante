@@ -1,11 +1,13 @@
 package com.gestorgastronomico.service;
 
+import com.gestorgastronomico.dto.SesionCajaDTO;
 import com.gestorgastronomico.dto.VentaRequestDTO;
 import com.gestorgastronomico.dto.VentaResponseDTO;
 import com.gestorgastronomico.entity.*;
 import com.gestorgastronomico.exception.BusinessException;
 import com.gestorgastronomico.repository.CierreCajaRepository;
 import com.gestorgastronomico.repository.PedidoRepository;
+import com.gestorgastronomico.repository.UsuarioRepository;
 import com.gestorgastronomico.repository.VentaRepository;
 import com.gestorgastronomico.websocket.RealtimeNotifier;
 import org.junit.jupiter.api.AfterEach;
@@ -42,6 +44,7 @@ class VentaServiceTest {
     @Mock private ConfigLocalService configLocalService;
     @Mock private RealtimeNotifier realtimeNotifier;
     @Mock private CierreCajaRepository cierreCajaRepository;
+    @Mock private UsuarioRepository usuarioRepository;
 
     private VentaService ventaService;
     private ConfigLocal config;
@@ -49,7 +52,7 @@ class VentaServiceTest {
     @BeforeEach
     void setUp() {
         ventaService = new VentaService(ventaRepository, pedidoRepository, configLocalService,
-                realtimeNotifier, cierreCajaRepository, RELOJ);
+                realtimeNotifier, cierreCajaRepository, usuarioRepository, RELOJ);
         config = ConfigLocal.builder().id(1L).cajaAbierta(true).cierreCaja(APERTURA.toString()).build();
         when(configLocalService.obtener()).thenReturn(config);
         when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -102,6 +105,43 @@ class VentaServiceTest {
     }
 
     @Test
+    void corregirYVolverAlMedioOriginal_borraLaMarcaDeCorregido() {
+        iniciarSesion("cajero@test.com", "CAJERO");
+        Venta venta = venta(13L, LocalDate.of(2026, 10, 5), LocalTime.of(21, 30));
+
+        ventaService.corregirMetodoPago(13L, MetodoPago.TARJETA);
+        VentaResponseDTO deVuelta = ventaService.corregirMetodoPago(13L, MetodoPago.EFECTIVO);
+
+        assertEquals(MetodoPago.EFECTIVO, deVuelta.getMetodoPago());
+        assertNull(deVuelta.getMetodoPagoOriginal());
+        assertNull(venta.getCorregidoPor());
+    }
+
+    @Test
+    void corregir_guardaElNombreDeQuienCorrige() {
+        iniciarSesion("cajero@test.com", "CAJERO");
+        when(usuarioRepository.findByEmail("cajero@test.com"))
+                .thenReturn(Optional.of(Usuario.builder().id(2L).nombre("Carlos Cajero").email("cajero@test.com").build()));
+        Venta venta = venta(14L, LocalDate.of(2026, 10, 5), LocalTime.of(21, 30));
+
+        ventaService.corregirMetodoPago(14L, MetodoPago.TRANSFERENCIA);
+
+        assertEquals("Carlos Cajero", venta.getCorregidoPor());
+    }
+
+    @Test
+    void corregirUnDeliveryATarjeta_seRechaza() {
+        iniciarSesion("admin@test.com", "ADMIN");
+        Venta venta = venta(15L, LocalDate.of(2026, 10, 5), LocalTime.of(21, 30));
+        venta.setPedido(Pedido.builder().id(9L).tipo(TipoPedido.DELIVERY).build());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> ventaService.corregirMetodoPago(15L, MetodoPago.TARJETA));
+
+        assertEquals("En delivery no se cobra con tarjeta.", error.getMessage());
+    }
+
+    @Test
     void cajero_noPuedeCorregirUnCobroDeUnaCajaAnterior() {
         iniciarSesion("cajero@test.com", "CAJERO");
         venta(11L, LocalDate.of(2026, 10, 4), LocalTime.of(21, 30));
@@ -117,6 +157,36 @@ class VentaServiceTest {
         VentaResponseDTO corregida = ventaService.corregirMetodoPago(12L, MetodoPago.TARJETA);
 
         assertEquals(MetodoPago.TARJETA, corregida.getMetodoPago());
+    }
+
+    @Test
+    void cajaAbiertaMasDeUnDia_muestraTodasSusVentasYEnOrden() {
+        Clock alMediodiaDel7 = Clock.fixed(Instant.parse("2026-10-07T18:00:00Z"), ZONA); // 7/10 15:00
+        VentaService servicio = new VentaService(ventaRepository, pedidoRepository, configLocalService,
+                realtimeNotifier, cierreCajaRepository, usuarioRepository, alMediodiaDel7);
+        LocalDateTime abrio = LocalDateTime.of(2026, 10, 5, 23, 43);
+        LocalDateTime cerro = LocalDateTime.of(2026, 10, 7, 14, 2);
+        config.setCierreCaja(LocalDateTime.of(2026, 10, 7, 14, 3).toString());
+        Venta delCinco = ventaDeJornada(1L, LocalDate.of(2026, 10, 5), LocalTime.of(23, 44), LocalDate.of(2026, 10, 5));
+        Venta delSiete = ventaDeJornada(2L, LocalDate.of(2026, 10, 7), LocalTime.of(13, 51), LocalDate.of(2026, 10, 7));
+        Venta cajaNueva = ventaDeJornada(3L, LocalDate.of(2026, 10, 7), LocalTime.of(14, 42), LocalDate.of(2026, 10, 7));
+        when(cierreCajaRepository.findByFechaAperturaBetweenOrderByFechaAperturaAsc(any(), any()))
+                .thenReturn(List.of(CierreCaja.builder().fechaApertura(abrio).fechaCierre(cerro).build()));
+        when(ventaRepository.findEntreJornadas(any(), any())).thenReturn(List.of(cajaNueva, delSiete, delCinco));
+        when(ventaRepository.findByJornada(LocalDate.of(2026, 10, 7))).thenReturn(List.of(delSiete, cajaNueva));
+
+        List<SesionCajaDTO> cajas = servicio.sesionesDe(LocalDate.of(2026, 10, 7));
+
+        assertEquals(2, cajas.size());
+        assertEquals(abrio, cajas.get(0).getApertura());
+        assertEquals(List.of(1L, 2L), cajas.get(0).getVentas().stream().map(VentaResponseDTO::getId).toList());
+        assertTrue(cajas.get(1).isAbierta());
+        assertEquals(List.of(3L), cajas.get(1).getVentas().stream().map(VentaResponseDTO::getId).toList());
+    }
+
+    private Venta ventaDeJornada(Long id, LocalDate fecha, LocalTime hora, LocalDate jornada) {
+        return Venta.builder().id(id).fecha(fecha).hora(hora).jornada(jornada).total(1000.0)
+                .metodoPago(MetodoPago.EFECTIVO).build();
     }
 
     @Test

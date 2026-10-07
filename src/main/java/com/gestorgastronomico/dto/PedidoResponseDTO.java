@@ -42,4 +42,8 @@ public class PedidoResponseDTO {
     private ClienteResponseDTO cliente;
     private List<DetallePedidoResponseDTO> detalles;
     private boolean cancelable;
+    /** Comanda de mesa por tarjetas. */
+    private boolean porTarjetas;
+    /** Al crear: true si lo cargado se sumó a una mesa que ya estaba abierta. */
+    private boolean agregadoAMesaAbierta;
 }

@@ -29,7 +29,7 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
     /** [nombre, categoría, opción, unidades, ingreso] del más vendido al menos vendido. */
     @Query("SELECT pr.nombre, pr.categoria, d.variante, SUM(d.cantidad), SUM(d.subtotal) " +
            "FROM Venta v JOIN v.pedido p JOIN p.detalles d JOIN d.producto pr " +
-           "WHERE v.jornada BETWEEN :desde AND :hasta " +
+           "WHERE v.jornada BETWEEN :desde AND :hasta AND (d.estado IS NULL OR d.estado <> 'CANCELADO') " +
            "GROUP BY pr.id, pr.nombre, pr.categoria, d.variante ORDER BY SUM(d.cantidad) DESC")
     List<Object[]> rankingProductosPorJornada(LocalDate desde, LocalDate hasta);
 
