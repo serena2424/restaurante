@@ -1,12 +1,13 @@
 package com.gestorgastronomico.dto;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/** Una caja dentro de la jornada: desde que abrió hasta que cerró, o hasta ahora si sigue abierta. */
+/** Una caja: desde que abrió hasta que cerró (o hasta ahora si sigue abierta), con sus ventas. */
 @Data
 @Builder
 @NoArgsConstructor
@@ -17,4 +18,5 @@ public class SesionCajaDTO {
     private Double total;
     private Integer cantidadVentas;
     private boolean abierta;
+    private List<VentaResponseDTO> ventas;
 }

@@ -103,9 +103,20 @@ public class Pedido {
     @Column(length = 20)
     private MetodoPago metodoPagoPreferido;
 
+    /**
+     * Comanda de mesa con tarjetas: cada producto tiene su propio estado y
+     * todo lo que pide la mesa se suma acá hasta cobrarla.
+     */
+    @Column
+    private Boolean porTarjetas;
+
     /** Envío cobrado (0 en retiro y en el local). */
     @Column
     private Double costoEnvio;
+
+    public boolean esComandaPorTarjetas() {
+        return Boolean.TRUE.equals(porTarjetas);
+    }
 
     public boolean estaPagado() {
         return venta != null;

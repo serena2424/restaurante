@@ -2,6 +2,49 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado semántico.
 
+## [1.4.0] - 2026-10
+
+Comanda por mesa con tarjetas.
+
+### Agregado
+- Una mesa tiene una sola comanda abierta hasta cobrarla. Lo que se carga después para esa mesa se suma a la misma comanda.
+- Cada producto de la mesa es una tarjeta con su estado: nuevo, en preparación, listo, entregado. Cocina avanza cada plato con un toque y el mozo lo entrega.
+- Las categorías marcadas "No va a cocina" (bebidas) no llegan a cocina: las entrega el mozo y suman en la cuenta.
+- Un plato cancelado queda tachado en la comanda y no se cobra. Una comanda cancelada queda tachada a la vista.
+- Cocina: cajas por mesa, sonido cuando la mesa agrega o cancela un plato, impresión opcional de lo nuevo.
+- Cobro de la mesa entera; si queda algo sin entregar, avisa antes. La mesa se cierra sola cuando está cobrada y todo entregado.
+
+### Cambiado
+- Mozo y cocina pueden cancelar comandas de mesa (retiro y delivery los sigue cancelando el cajero).
+- El ranking de productos no cuenta los platos cancelados.
+
+## [1.3.0] - 2026-10
+
+Tercera ronda de pruebas (todas las pestañas y roles).
+
+### Agregado
+- Aviso en Pedidos y Ventas cuando la caja lleva más de 24 horas abierta.
+- "Reservas de hoy" incluye las de la madrugada del turno de la noche, marcadas "(madrugada)".
+- La web muestra el máximo de personas por reserva y avisa antes de enviar.
+
+### Cambiado
+- Las cajas se muestran en cada día en que tuvieron ventas, con todas sus ventas y de la más vieja a la más nueva.
+- Los precios del menú van en pesos enteros.
+- Los emails de usuario se guardan en minúscula y se comparan sin importar mayúsculas.
+- Quien carga un pedido no recibe el aviso de "pedido nuevo" de ese pedido.
+- Si un cobro corregido vuelve a su medio original, deja de figurar como corregido; se registra el nombre de quien corrige.
+
+### Corregido
+- Cocina no puede crear pedidos.
+- Un usuario con mayúsculas en el email no se podía editar.
+- Al cobrar no se puede confirmar si "Paga con" es menor que el total.
+- Al corregir el cobro de un delivery ya no se ofrece tarjeta.
+- Las categorías de Menú y de Nuevo pedido ya no se afectan entre sí.
+- Los horarios de Nuevo pedido se recalculan al abrir la pestaña.
+- El tablero y la pantalla de cocina se actualizan siempre después de cada acción.
+- Mensajes de error de Configuración con un solo punto.
+- Reservas para después de medianoche con la fecha de hoy: mensaje que explica elegir el día siguiente.
+
 ## [1.2.0] - 2026-10
 
 Segunda ronda de pruebas (Reservas, Usuarios, Cocina, Mozo, Cajero y página pública).

@@ -89,7 +89,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PATCH, "/api/pedidos/*/detalles/*/cantidad",
                         "/api/pedidos/*/datos-cliente").hasAnyRole(ADMIN, CAJERO, MOZO)
                 .requestMatchers(HttpMethod.POST, "/api/pedidos/**").hasAnyRole(ADMIN, CAJERO, MOZO)
-                .requestMatchers(HttpMethod.PATCH, "/api/pedidos/*/cancelar").hasAnyRole(ADMIN, CAJERO)
+                // Comanda de mesa: cada plato cambia de estado o se cancela (las reglas por rol, en PedidoService).
+                .requestMatchers(HttpMethod.PATCH, "/api/pedidos/*/detalles/*/estado",
+                        "/api/pedidos/*/detalles/*/cancelar").hasAnyRole(ADMIN, CAJERO, MOZO, COCINA)
+                .requestMatchers(HttpMethod.PATCH, "/api/pedidos/*/cancelar").hasAnyRole(ADMIN, CAJERO, MOZO, COCINA)
                 .requestMatchers(HttpMethod.PATCH, "/api/pedidos/*/estado").hasAnyRole(ADMIN, CAJERO, COCINA)
 
                 .anyRequest().authenticated()

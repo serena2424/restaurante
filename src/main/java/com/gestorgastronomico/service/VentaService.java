@@ -8,6 +8,7 @@ import com.gestorgastronomico.exception.BusinessException;
 import com.gestorgastronomico.exception.ResourceNotFoundException;
 import com.gestorgastronomico.repository.CierreCajaRepository;
 import com.gestorgastronomico.repository.PedidoRepository;
+import com.gestorgastronomico.repository.UsuarioRepository;
 import com.gestorgastronomico.repository.VentaRepository;
 import com.gestorgastronomico.websocket.RealtimeNotifier;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -31,6 +33,7 @@ public class VentaService {
 
     private static final Logger logger = LoggerFactory.getLogger(VentaService.class);
     /** Una caja abierta más de este tiempo se considera olvidada: las ventas cuentan en su día real. */
+    private static final int DIAS_HACIA_ATRAS_DE_UNA_CAJA = 31;
     private static final int HORAS_MAXIMAS_DE_UNA_JORNADA = 24;
 
     private final VentaRepository ventaRepository;
@@ -38,6 +41,7 @@ public class VentaService {
     private final ConfigLocalService configLocalService;
     private final RealtimeNotifier realtimeNotifier;
     private final CierreCajaRepository cierreCajaRepository;
+    private final UsuarioRepository usuarioRepository;
     private final Clock clock;
 
     /**
@@ -68,7 +72,10 @@ public class VentaService {
                 .build();
         pedido.setVenta(venta);
 
-        if (!Boolean.FALSE.equals(dto.getEntregar())) {
+        if (pedido.esComandaPorTarjetas()) {
+            // La mesa se cierra sola cuando además de cobrada está todo entregado.
+            ComandaMesa.recalcularEstado(pedido, ahora);
+        } else if (!Boolean.FALSE.equals(dto.getEntregar())) {
             pedido.setEstado(EstadoPedido.ENTREGADO);
             pedido.setEntregadoEn(ahora);
         }
@@ -95,14 +102,32 @@ public class VentaService {
             throw new BusinessException("Solo se pueden corregir cobros de la caja abierta. Para uno anterior, pedíselo al admin.");
         }
 
+        if (nuevo == MetodoPago.TARJETA && venta.getPedido() != null && venta.getPedido().getTipo() == TipoPedido.DELIVERY) {
+            throw new BusinessException("En delivery no se cobra con tarjeta.");
+        }
+
         if (venta.getMetodoPagoOriginal() == null) venta.setMetodoPagoOriginal(venta.getMetodoPago());
         venta.setMetodoPago(nuevo);
-        venta.setCorregidoPor(auth != null ? auth.getName() : null);
-        venta.setCorregidoEn(LocalDateTime.now(clock));
+        if (nuevo == venta.getMetodoPagoOriginal()) {
+            // Volvió al medio con que se cobró: ya no hay nada corregido.
+            venta.setMetodoPagoOriginal(null);
+            venta.setCorregidoPor(null);
+            venta.setCorregidoEn(null);
+        } else {
+            venta.setCorregidoPor(nombreDe(auth));
+            venta.setCorregidoEn(LocalDateTime.now(clock));
+        }
         logger.info("Venta #{}: medio de pago corregido a {} por {}", ventaId, nuevo, venta.getCorregidoPor());
         Venta guardada = ventaRepository.save(venta);
         realtimeNotifier.avisarPedidos();
         return toDTO(guardada);
+    }
+
+    private String nombreDe(Authentication auth) {
+        if (auth == null) return null;
+        return usuarioRepository.findByEmail(auth.getName())
+                .map(u -> u.getNombre() != null && !u.getNombre().isBlank() ? u.getNombre() : u.getEmail())
+                .orElse(auth.getName());
     }
 
     private boolean perteneceACajaAbierta(Venta venta) {
@@ -237,47 +262,78 @@ public class VentaService {
     }
 
     /**
-     * Cajas de una jornada, cada una con su total: las cerradas, la abierta (si
-     * es la jornada en curso) y, si quedaron ventas sin caja registrada (datos
-     * de versiones anteriores), una tarjeta extra con esas.
+     * Cajas que tuvieron movimiento en una jornada, de la más vieja a la más nueva.
+     * Cada caja trae todas sus ventas, aunque algunas sean de otro día (cuando la
+     * caja quedó abierta más de un día). Si hay ventas de la jornada que no caen en
+     * ninguna caja (datos de versiones anteriores), van en una tarjeta aparte.
      */
     @Transactional(readOnly = true)
     public List<SesionCajaDTO> sesionesDe(LocalDate jornada) {
+        LocalDateTime ahora = LocalDateTime.now(clock);
+        LocalDate desdeDia = jornada.minusDays(DIAS_HACIA_ATRAS_DE_UNA_CAJA);
+        // Una sola consulta para todo el rango; después se reparte por caja en memoria.
+        List<Venta> candidatas = ventaRepository.findEntreJornadas(desdeDia.minusDays(1), ahora.toLocalDate().plusDays(1));
+
         List<SesionCajaDTO> cajas = new ArrayList<>();
         cierreCajaRepository.findByFechaAperturaBetweenOrderByFechaAperturaAsc(
-                        jornada.atStartOfDay(), jornada.atTime(LocalTime.MAX))
-                .forEach(c -> cajas.add(SesionCajaDTO.builder()
-                        .apertura(c.getFechaApertura())
-                        .cierre(c.getFechaCierre())
-                        .total(c.getTotalVentas())
-                        .cantidadVentas(c.getCantidadVentas())
-                        .abierta(false)
-                        .build()));
+                        desdeDia.atStartOfDay(), jornada.atTime(LocalTime.MAX))
+                .forEach(c -> {
+                    if (c.getFechaApertura() == null || c.getFechaCierre() == null) return;
+                    List<Venta> ventas = ventasEntre(candidatas, c.getFechaApertura(), c.getFechaCierre());
+                    if (c.getFechaApertura().toLocalDate().equals(jornada) || tieneVentasDe(ventas, jornada)) {
+                        cajas.add(sesion(c.getFechaApertura(), c.getFechaCierre(), ventas, false));
+                    }
+                });
 
         boolean abierta = !Boolean.FALSE.equals(configLocalService.obtener().getCajaAbierta());
-        if (abierta && jornada.isEqual(jornadaActual())) {
-            List<VentaResponseDTO> ventas = listarDesdeCierre();
+        if (abierta) {
             LocalDateTime inicio = inicioCajaActual();
-            cajas.add(SesionCajaDTO.builder()
-                    .apertura(inicio != null ? inicio : jornada.atStartOfDay())
-                    .total(ventas.stream().mapToDouble(v -> v.getTotal() != null ? v.getTotal() : 0.0).sum())
-                    .cantidadVentas(ventas.size())
-                    .abierta(true)
-                    .build());
+            LocalDateTime desde = inicio != null ? inicio : ahora.toLocalDate().atStartOfDay();
+            List<Venta> ventas = ventasEntre(candidatas, desde, null);
+            if (jornada.isEqual(jornadaActual()) || desde.toLocalDate().equals(jornada) || tieneVentasDe(ventas, jornada)) {
+                cajas.add(sesion(desde, null, ventas, true));
+            }
         }
 
-        int contadas = cajas.stream().mapToInt(SesionCajaDTO::getCantidadVentas).sum();
-        List<VentaResponseDTO> delDia = listarPorFecha(jornada);
-        if (delDia.size() > contadas) {
-            double sueltas = delDia.stream().mapToDouble(v -> v.getTotal() != null ? v.getTotal() : 0.0).sum()
-                    - cajas.stream().mapToDouble(SesionCajaDTO::getTotal).sum();
-            cajas.add(SesionCajaDTO.builder()
-                    .total(Math.max(sueltas, 0))
-                    .cantidadVentas(delDia.size() - contadas)
-                    .abierta(false)
-                    .build());
+        Set<Long> enCajas = cajas.stream().flatMap(c -> c.getVentas().stream()).map(VentaResponseDTO::getId)
+                .collect(Collectors.toSet());
+        List<Venta> sueltas = ventaRepository.findByJornada(jornada).stream()
+                .filter(v -> !enCajas.contains(v.getId()))
+                .toList();
+        if (!sueltas.isEmpty()) {
+            cajas.add(sesion(null, null, sueltas, false));
         }
         return cajas;
+    }
+
+    private SesionCajaDTO sesion(LocalDateTime apertura, LocalDateTime cierre, List<Venta> ventas, boolean abierta) {
+        List<VentaResponseDTO> dtos = ventas.stream()
+                .sorted(Comparator.comparing(Venta::getFecha).thenComparing(Venta::getHora))
+                .map(this::toDTO)
+                .toList();
+        return SesionCajaDTO.builder()
+                .apertura(apertura)
+                .cierre(cierre)
+                .total(ventas.stream().mapToDouble(VentaService::totalDe).sum())
+                .cantidadVentas(ventas.size())
+                .abierta(abierta)
+                .ventas(dtos)
+                .build();
+    }
+
+    /** Ventas de [desde, hasta): una caja va desde que abre hasta que cierra. Sin "hasta", hasta ahora. */
+    private static List<Venta> ventasEntre(List<Venta> candidatas, LocalDateTime desde, LocalDateTime hasta) {
+        return candidatas.stream()
+                .filter(v -> v.getFecha() != null && v.getHora() != null)
+                .filter(v -> {
+                    LocalDateTime momento = v.getFecha().atTime(v.getHora());
+                    return !momento.isBefore(desde) && (hasta == null || momento.isBefore(hasta));
+                })
+                .toList();
+    }
+
+    private static boolean tieneVentasDe(List<Venta> ventas, LocalDate jornada) {
+        return ventas.stream().anyMatch(v -> jornada.equals(v.getJornada()));
     }
 
     /** Día de trabajo en curso: la fecha en que se abrió la caja actual. */
@@ -329,7 +385,11 @@ public class VentaService {
         Pedido pedido = venta.getPedido();
         if (pedido == null) return;
         pedido.setVenta(null);
-        if (pedido.getEstado() == EstadoPedido.ENTREGADO) {
+        if (pedido.esComandaPorTarjetas()) {
+            pedido.setEntregadoEn(null);
+            if (pedido.getEstado() == EstadoPedido.ENTREGADO) pedido.setEstado(EstadoPedido.LISTO);
+            ComandaMesa.recalcularEstado(pedido, LocalDateTime.now(clock));
+        } else if (pedido.getEstado() == EstadoPedido.ENTREGADO) {
             pedido.setEstado(EstadoPedido.LISTO);
             pedido.setEntregadoEn(null);
         }
@@ -359,6 +419,7 @@ public class VentaService {
         return VentaResponseDTO.builder()
                 .id(v.getId())
                 .fecha(v.getFecha())
+                .jornada(v.getJornada())
                 .hora(v.getHora())
                 .total(v.getTotal())
                 .metodoPago(v.getMetodoPago())

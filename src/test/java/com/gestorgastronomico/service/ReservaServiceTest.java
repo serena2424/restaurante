@@ -59,6 +59,24 @@ class ReservaServiceTest {
     }
 
     @Test
+    void reservasDeHoy_incluyenLaMadrugadaDelTurnoDeEstaNoche() {
+        LocalDate hoy = LocalDate.of(2026, 10, 6);
+        LocalDate manana = hoy.plusDays(1);
+        Reserva cena = Reserva.builder().id(1L).nombreCliente("Ana").fecha(hoy).hora(LocalTime.of(21, 0))
+                .cantidadPersonas(2).estado(EstadoReserva.CONFIRMADA).build();
+        Reserva madrugada = Reserva.builder().id(2L).nombreCliente("Beto").fecha(manana).hora(LocalTime.of(0, 30))
+                .cantidadPersonas(2).estado(EstadoReserva.CONFIRMADA).build();
+        Reserva cenaDeManana = Reserva.builder().id(3L).nombreCliente("Caro").fecha(manana).hora(LocalTime.of(21, 0))
+                .cantidadPersonas(2).estado(EstadoReserva.CONFIRMADA).build();
+        when(reservaRepository.findByFechaOrderByHoraAsc(hoy)).thenReturn(List.of(cena));
+        when(reservaRepository.findByFechaOrderByHoraAsc(manana)).thenReturn(List.of(madrugada, cenaDeManana));
+
+        List<ReservaResponseDTO> deHoy = reservaService.listarDeHoy();
+
+        assertEquals(List.of(1L, 2L), deHoy.stream().map(ReservaResponseDTO::getId).toList());
+    }
+
+    @Test
     void reservaDentroDelHorario_seConfirma() {
         ReservaResponseDTO reserva = reservaService.crear(pedido("Ana", MIERCOLES, "21:00", 4));
 

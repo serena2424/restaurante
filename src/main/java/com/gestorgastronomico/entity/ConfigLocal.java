@@ -105,6 +105,16 @@ public class ConfigLocal {
     /** Máximo de personas reservadas por turno. Vacío o 0 = sin límite. */
     private Integer maxPersonasTurno;
 
+    /**
+     * Categorías que no pasan por cocina (bebidas), separadas por coma.
+     * Null = todavía no se configuró: se deducen por el nombre.
+     */
+    @Column(length = 1000)
+    private String categoriasSinCocina;
+
+    /** Abrir la impresión de la comanda en cocina cuando llegan platos nuevos de una mesa. */
+    private Boolean imprimirComandaCocina;
+
     /** Inicio de la caja actual (cuándo se abrió) en formato ISO. */
     @JsonIgnore
     private String cierreCaja;

@@ -9,6 +9,8 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/config")
 @RequiredArgsConstructor
@@ -33,6 +35,12 @@ public class ConfigLocalController {
     @Operation(summary = "Abrir, cerrar o volver a automático (solo admin)")
     public ResponseEntity<ConfigLocal> cambiarEstadoManual(@RequestParam String modo) {
         return ResponseEntity.ok(service.cambiarEstadoManual(modo));
+    }
+
+    @PatchMapping("/categorias-sin-cocina")
+    @Operation(summary = "Categorías que no pasan por cocina, como las bebidas (solo admin)")
+    public ResponseEntity<ConfigLocal> guardarCategoriasSinCocina(@RequestBody List<String> categorias) {
+        return ResponseEntity.ok(service.guardarCategoriasSinCocina(categorias));
     }
 
     @PutMapping

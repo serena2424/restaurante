@@ -6,6 +6,8 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Table(name = "detalle_pedidos")
 @Data
@@ -38,6 +40,26 @@ public class DetallePedido {
     @Column(length = 60)
     private String variante;
 
+    /**
+     * Estado de la tarjeta en una comanda de mesa. Null en retiro, delivery y
+     * pedidos viejos: ahí manda el estado del pedido.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private EstadoPedido estado;
+
+    /** False en las bebidas y en todo lo que no pasa por cocina (lo entrega el mozo). */
+    private Boolean vaACocina;
+
+    /** Cuándo se cargó la tarjeta. */
+    private LocalDateTime creadoEn;
+
+    /** Último cambio de estado de la tarjeta. */
+    private LocalDateTime estadoEn;
+
+    /** Cambio de cantidad después de cargada, para que cocina lo note. Se borra al pasar a LISTO. */
+    private LocalDateTime modificadoEn;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "pedido_id", nullable = false)
     @ToString.Exclude
@@ -47,6 +69,18 @@ public class DetallePedido {
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "producto_id", nullable = false)
     private Producto producto;
+
+    public boolean esTarjeta() {
+        return estado != null;
+    }
+
+    public boolean estaCancelada() {
+        return estado == EstadoPedido.CANCELADO;
+    }
+
+    public boolean pasaPorCocina() {
+        return !Boolean.FALSE.equals(vaACocina);
+    }
 
     @PrePersist
     @PreUpdate

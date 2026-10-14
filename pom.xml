@@ -14,7 +14,7 @@
 
     <groupId>com.gestorgastronomico</groupId>
     <artifactId>gestor-gastronomico-backend</artifactId>
-    <version>1.2.0</version>
+    <version>1.4.0</version>
     <name>Gestor Gastronómico - Backend</name>
     <description>API de pedidos, ventas, reservas y menú para bares y restaurantes</description>
 

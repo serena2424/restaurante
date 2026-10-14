@@ -92,6 +92,9 @@ public class ProductoService {
                 if (precio <= 0 || precio > 9999999) {
                     throw new BusinessException("El precio de la variante \"" + nombre + "\" tiene que estar entre $0 y $9.999.999.");
                 }
+                if (precio % 1 != 0) {
+                    throw new BusinessException("El precio de la variante \"" + nombre + "\" va en pesos enteros, sin centavos.");
+                }
                 java.util.Map<String, Object> limpia = new java.util.LinkedHashMap<>();
                 limpia.put("nombre", nombre);
                 limpia.put("precio", precio);
@@ -106,6 +109,9 @@ public class ProductoService {
     }
 
     private void validarTextos(ProductoRequestDTO dto) {
+        if (dto.getPrecio() != null && dto.getPrecio() % 1 != 0) {
+            throw new BusinessException("El precio va en pesos enteros, sin centavos.");
+        }
         if (dto.getNombre() != null && dto.getNombre().matches(".*[<>`].*")) {
             throw new BusinessException("El nombre del producto no puede tener los caracteres < > `");
         }
@@ -174,8 +180,7 @@ public class ProductoService {
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             // Figura en pedidos anteriores: se desactiva para no romper el historial.
             throw new BusinessException(
-                "Este producto ya fue pedido alguna vez, así que no se puede borrar "
-                + "sin perder el historial. Desactivalo para que deje de aparecer en la carta.");
+                "Este plato ya se pidió alguna vez, así que no se puede borrar sin perder el historial.");
         }
     }
 

@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -33,10 +35,27 @@ public class ConfigLocalService {
         validar(cfg);
         ConfigLocal actual = obtener();
         cfg.setCierreCaja(actual.getCierreCaja());
+        // Se editan desde Gestor de menú; un panel viejo no los manda.
+        if (cfg.getCategoriasSinCocina() == null) cfg.setCategoriasSinCocina(actual.getCategoriasSinCocina());
+        if (cfg.getImprimirComandaCocina() == null) cfg.setImprimirComandaCocina(actual.getImprimirComandaCocina());
         cfg.setCajaAbierta(actual.getCajaAbierta());
         cfg.setLoginEmails("[]");
         cfg.setHorarioLibre("");
         cfg.setNombre(cfg.getNombre().trim());
+        return guardar(cfg);
+    }
+
+    /** Guarda qué categorías no pasan por cocina (bebidas). Lista vacía = todas van a cocina. */
+    public ConfigLocal guardarCategoriasSinCocina(List<String> categorias) {
+        String texto = categorias == null ? "" : categorias.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(c -> !c.isEmpty())
+                .distinct()
+                .collect(Collectors.joining(","));
+        if (texto.length() > 1000) throw new BusinessException("Son demasiadas categorías.");
+        ConfigLocal cfg = obtener();
+        cfg.setCategoriasSinCocina(texto);
         return guardar(cfg);
     }
 

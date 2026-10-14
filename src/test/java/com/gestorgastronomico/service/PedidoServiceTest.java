@@ -20,6 +20,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.*;
@@ -202,6 +204,21 @@ class PedidoServiceTest {
         PedidoResponseDTO pedido = pedidoService.crear(pedidoPublico(TipoPedido.RETIRO, null, 1));
 
         assertEquals(1000.0, pedido.getTotal(), 0.001);
+    }
+
+    @Test
+    void cocina_noPuedeCargarPedidos() {
+        Usuario cocina = Usuario.builder().id(3L).nombre("Cocina").email("cocina@test.com").rol(Rol.COCINA).activo(true).build();
+        when(usuarioRepository.findByEmail("cocina@test.com")).thenReturn(Optional.of(cocina));
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "cocina@test.com", null, List.of(new SimpleGrantedAuthority("ROLE_COCINA"))));
+        PedidoRequestDTO dto = pedidoPublico(TipoPedido.LOCAL, null, 1);
+        dto.setMesa("3");
+
+        BusinessException error = assertThrows(BusinessException.class, () -> pedidoService.crear(dto));
+
+        assertEquals("Cocina no carga pedidos.", error.getMessage());
+        verify(pedidoRepository, never()).save(any(Pedido.class));
     }
 
     @Test
