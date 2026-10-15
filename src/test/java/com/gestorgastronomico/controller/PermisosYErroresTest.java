@@ -78,6 +78,19 @@ class PermisosYErroresTest {
     }
 
     @Test
+    void elFondoDelLogin_esPublicoPeroNoViajaEnLaConfiguracion() throws Exception {
+        ConfigLocal cfg = ConfigLocal.builder().id(1L).nombre("La Esquina").fondoLoginUrl("data:image/jpeg;base64,AAAA").build();
+        when(configLocalService.obtener()).thenReturn(cfg);
+
+        mockMvc.perform(get("/api/config/fondo-login"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fondoLoginUrl").value("data:image/jpeg;base64,AAAA"));
+        mockMvc.perform(get("/api/config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fondoLoginUrl").doesNotExist());
+    }
+
+    @Test
     void fechaImposible_respondeConMensajeClaro() throws Exception {
         String reserva = """
                 {"nombreCliente":"Ana","fecha":"2027-02-31","hora":"21:00","cantidadPersonas":2,"telefono":"3447123456"}

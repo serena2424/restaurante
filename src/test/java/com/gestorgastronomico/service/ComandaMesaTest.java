@@ -3,6 +3,7 @@ package com.gestorgastronomico.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gestorgastronomico.dto.DetallePedidoRequestDTO;
 import com.gestorgastronomico.dto.DetallePedidoResponseDTO;
+import com.gestorgastronomico.dto.PedidoDatosClienteDTO;
 import com.gestorgastronomico.dto.PedidoRequestDTO;
 import com.gestorgastronomico.dto.PedidoResponseDTO;
 import com.gestorgastronomico.entity.*;
@@ -266,24 +267,61 @@ class ComandaMesaTest {
     }
 
     @Test
-    void mesaAbiertaPorElCajero_elMozoPuedeSumarle() {
+    void mesaAbiertaPorElCajero_esDelMozoQueEligio() {
         como(cajero);
-        PedidoResponseDTO mesa = pedidoService.crear(pedidoMesa("7", item(10L, 1)));
+        PedidoRequestDTO dto = pedidoMesa("7", item(10L, 1));
+        dto.setMozoId(mozo.getId());
+        PedidoResponseDTO mesa = pedidoService.crear(dto);
+        assertEquals("Juan", mesa.getMozoNombre());
         Pedido comanda = pedidoRepository.findById(mesa.getId()).orElseThrow();
         when(pedidoRepository.findComandasAbiertasDeMesa("7")).thenReturn(List.of(comanda));
+        when(pedidoRepository.findPedidosActivos()).thenReturn(List.of(comanda));
 
         como(mozo);
         assertTrue(pedidoService.crear(pedidoMesa("7", item(13L, 1))).isAgregadoAMesaAbierta());
+        assertEquals(1, pedidoService.listarActivos().size());
+
+        como(otroMozo);
+        assertTrue(pedidoService.listarActivos().isEmpty());
+        assertThrows(BusinessException.class, () -> pedidoService.crear(pedidoMesa("7", item(13L, 1))));
     }
 
     @Test
-    void mesaConPlatosEntregados_laCancelaSoloElCajero() {
+    void cajeroAbreMesa_sinElegirMozo_avisa() {
+        como(cajero);
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> pedidoService.crear(pedidoMesa("8", item(10L, 1))));
+        assertEquals("Elegí qué mozo atiende la mesa.", error.getMessage());
+
+        PedidoRequestDTO conCocina = pedidoMesa("8", item(10L, 1));
+        conCocina.setMozoId(cocina.getId());
+        assertEquals("Elegí un mozo activo para la mesa.",
+                assertThrows(BusinessException.class, () -> pedidoService.crear(conCocina)).getMessage());
+
+        // Con el mozo elegido, el mismo pedido entra (no se toma como repetido).
+        PedidoRequestDTO conMozo = pedidoMesa("8", item(10L, 1));
+        conMozo.setMozoId(mozo.getId());
+        assertEquals("Juan", pedidoService.crear(conMozo).getMozoNombre());
+    }
+
+    @Test
+    void elCajeroCambiaElMozo_elMozoNo() {
+        como(mozo);
+        PedidoResponseDTO mesa = pedidoService.crear(pedidoMesa("5", item(10L, 1)));
+        PedidoDatosClienteDTO cambio = new PedidoDatosClienteDTO();
+        cambio.setMozoId(otroMozo.getId());
+
+        assertThrows(BusinessException.class, () -> pedidoService.actualizarDatosCliente(mesa.getId(), cambio));
+        como(cajero);
+        assertEquals("Mateo", pedidoService.actualizarDatosCliente(mesa.getId(), cambio).getMozoNombre());
+    }
+
+    @Test
+    void mesaConPlatosEntregados_elMozoLaPuedeCancelarEntera() {
         como(mozo);
         PedidoResponseDTO mesa = pedidoService.crear(pedidoMesa("5", item(12L, 1), item(10L, 1)));
         pedidoService.cambiarEstadoTarjeta(mesa.getId(), tarjetaDe(mesa, "Coca-Cola 500ml").getId(), EstadoPedido.ENTREGADO);
 
-        assertThrows(BusinessException.class, () -> pedidoService.cancelar(mesa.getId()));
-        como(cajero);
         assertEquals(EstadoPedido.CANCELADO, pedidoService.cancelar(mesa.getId()).getEstado());
     }
 

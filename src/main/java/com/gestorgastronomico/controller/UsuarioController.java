@@ -38,6 +38,12 @@ public class UsuarioController {
         return ResponseEntity.ok(usuarioService.listarTodos());
     }
 
+    @GetMapping("/mozos")
+    @Operation(summary = "Mozos activos (admin y cajero)", description = "Para elegir qué mozo atiende una mesa.")
+    public ResponseEntity<List<UsuarioResponseDTO>> mozos() {
+        return ResponseEntity.ok(usuarioService.mozosActivos());
+    }
+
     @PostMapping("/login")
     @Operation(summary = "Login de usuario", description = "Valida email y contraseña. Devuelve los datos del usuario y el token JWT.")
     @ApiResponse(responseCode = "200", description = "Login exitoso")

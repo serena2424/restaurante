@@ -38,6 +38,8 @@ public class ConfigLocalService {
         // Se editan desde Gestor de menú; un panel viejo no los manda.
         if (cfg.getCategoriasSinCocina() == null) cfg.setCategoriasSinCocina(actual.getCategoriasSinCocina());
         if (cfg.getImprimirComandaCocina() == null) cfg.setImprimirComandaCocina(actual.getImprimirComandaCocina());
+        // Un panel anterior no conoce el fondo del login: si no lo manda, queda el que estaba.
+        if (cfg.getFondoLoginUrl() == null) cfg.setFondoLoginUrl(actual.getFondoLoginUrl());
         cfg.setCajaAbierta(actual.getCajaAbierta());
         cfg.setLoginEmails("[]");
         cfg.setHorarioLibre("");
@@ -74,9 +76,9 @@ public class ConfigLocalService {
         return repo.save(cfg);
     }
 
-    /** Copia de la configuración sin logo ni portada, para los refrescos periódicos de la web. */
+    /** Copia de la configuración sin imágenes, para los refrescos periódicos de la web. */
     public ConfigLocal obtenerSinImagenes() {
-        return obtener().toBuilder().logoUrl(null).heroUrl(null).build();
+        return obtener().toBuilder().logoUrl(null).heroUrl(null).fondoLoginUrl(null).build();
     }
 
     void validar(ConfigLocal cfg) {

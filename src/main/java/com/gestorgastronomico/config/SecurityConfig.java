@@ -55,7 +55,7 @@ public class SecurityConfig {
 
                 // Página pública
                 .requestMatchers(HttpMethod.GET, "/api/productos/activos", "/api/productos/categoria/**",
-                        "/api/productos/buscar", "/api/config", "/api/config/estado").permitAll()
+                        "/api/productos/buscar", "/api/config", "/api/config/estado", "/api/config/fondo-login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/pedidos", "/api/reservas",
                         "/api/usuarios/login", "/api/usuarios/reset-password").permitAll()
                 // El canal en tiempo real solo avisa "algo cambió", sin datos.
@@ -64,6 +64,7 @@ public class SecurityConfig {
                 // Administración
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").hasRole(ADMIN)
                 .requestMatchers(HttpMethod.GET, "/api/usuarios/me").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/usuarios/mozos").hasAnyRole(ADMIN, CAJERO)
                 .requestMatchers("/api/usuarios/**").hasRole(ADMIN)
                 .requestMatchers(HttpMethod.PUT, "/api/config/**").hasRole(ADMIN)
                 .requestMatchers(HttpMethod.POST, "/api/config/**").hasRole(ADMIN)

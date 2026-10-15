@@ -32,6 +32,9 @@ public class PedidoResponseDTO {
     private String mesa;
     private Long creadoPorUsuarioId;
     private String creadoPorNombre;
+    /** Mozo que atiende la mesa (null si no tiene). */
+    private Long mozoId;
+    private String mozoNombre;
     private java.time.LocalDateTime modificadoEn;
     private String detalleSnapshotAntesEdicion;
     @JsonFormat(pattern = "HH:mm:ss")

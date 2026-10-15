@@ -36,6 +36,9 @@ public class PedidoRequestDTO {
 
     private MetodoPago metodoPagoPreferido;
 
+    /** Mozo que atiende la mesa. Solo lo eligen el admin y el cajero. */
+    private Long mozoId;
+
     @NotEmpty(message = "El pedido debe tener al menos un producto")
     @Valid
     private List<DetallePedidoRequestDTO> detalles;

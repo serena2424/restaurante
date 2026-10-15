@@ -2,6 +2,19 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado semántico.
 
+## [1.5.0] - 2026-10
+
+Cuarta ronda de pruebas.
+
+### Agregado
+- Mozo de la mesa: si la abre el admin o el cajero, eligen qué mozo la atiende (`mozoId`). Se puede cambiar después. `GET /api/usuarios/mozos` para la lista.
+- Ventas, cierre de caja e informe separan el delivery (con su envío) de la plata del local.
+- Foto de fondo para el inicio de sesión del panel (`fondoLoginUrl` en la configuración).
+
+### Cambiado
+- El mozo ve y maneja solo sus mesas: las que tiene asignadas (o, en pedidos viejos, las que cargó).
+- La comanda entera se puede cancelar aunque tenga platos entregados (mozo, cocina, cajero o admin), mientras no esté cobrada.
+
 ## [1.4.0] - 2026-10
 
 Comanda por mesa con tarjetas.

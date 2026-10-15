@@ -203,6 +203,10 @@ class VentaServiceTest {
         assertEquals(22300.0, (Double) informe.get("total"), 0.001);
         assertEquals(800.0, (Double) informe.get("envios"), 0.001);
         assertEquals(21500.0, (Double) informe.get("totalSinEnvios"), 0.001);
+        // El delivery va aparte, con su envío, para repartirlo después.
+        assertEquals(12800.0, (Double) informe.get("totalDelivery"), 0.001);
+        assertEquals(9500.0, (Double) informe.get("totalLocal"), 0.001);
+        assertEquals(1, informe.get("cantidadDelivery"));
     }
 
     @Test

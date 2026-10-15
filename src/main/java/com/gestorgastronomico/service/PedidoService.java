@@ -117,9 +117,11 @@ public class PedidoService {
         }
 
         boolean comandaDeMesa = !esPublico && dto.getTipo() == TipoPedido.LOCAL && mesa != null;
+        Usuario mozo = null;
         if (comandaDeMesa) {
             Optional<Pedido> abierta = pedidoRepository.findComandasAbiertasDeMesa(mesa).stream().findFirst();
             if (abierta.isPresent()) return sumarAComandaAbierta(abierta.get(), dto, responsable);
+            mozo = responsable.getRol() == Rol.MOZO ? responsable : mozoElegido(dto.getMozoId(), true);
         }
 
         Pedido pedido = Pedido.builder()
@@ -137,6 +139,8 @@ public class PedidoService {
                 .mesa(mesa)
                 .metodoPagoPreferido(dto.getMetodoPagoPreferido())
                 .porTarjetas(comandaDeMesa ? Boolean.TRUE : null)
+                .mozoId(mozo != null ? mozo.getId() : null)
+                .mozoNombre(mozo != null ? mozo.getNombre() : null)
                 .build();
 
         if (dto.getClienteId() != null) {
@@ -198,11 +202,9 @@ public class PedidoService {
     public PedidoResponseDTO cancelar(Long id) {
         Pedido pedido = buscar(id);
         verificarPuedeEditar(pedido);
-        if (tieneRol(Rol.MOZO) || tieneRol(Rol.COCINA)) {
-            if (!pedido.esComandaPorTarjetas()) throw new BusinessException("Este pedido lo cancela el cajero.");
-            if (pedido.getDetalles().stream().anyMatch(d -> d.getEstado() == EstadoPedido.ENTREGADO)) {
-                throw new BusinessException("Esta mesa ya tiene platos entregados. Sacá lo que no quieran o pedile al cajero que la cancele.");
-            }
+        // La comanda entera la puede cancelar cualquiera que la atienda: es criterio del local.
+        if ((tieneRol(Rol.MOZO) || tieneRol(Rol.COCINA)) && !pedido.esComandaPorTarjetas()) {
+            throw new BusinessException("Este pedido lo cancela el cajero.");
         }
         if (pedido.getEstado() == EstadoPedido.CANCELADO) {
             throw new BusinessException("El pedido ya está cancelado");
@@ -352,8 +354,9 @@ public class PedidoService {
 
     /** Suma lo que cargó el mozo a la comanda abierta de esa mesa, como tarjetas nuevas. */
     private PedidoResponseDTO sumarAComandaAbierta(Pedido comanda, PedidoRequestDTO dto, Usuario responsable) {
-        if (responsable.getRol() == Rol.MOZO && !esDelMozo(comanda, responsable, idsDeMozos())) {
-            String quien = comanda.getCreadoPorNombre() != null ? comanda.getCreadoPorNombre() : "otro mozo";
+        if (responsable.getRol() == Rol.MOZO && !esDelMozo(comanda, responsable)) {
+            String quien = comanda.getMozoNombre() != null ? comanda.getMozoNombre()
+                    : comanda.getCreadoPorNombre() != null ? comanda.getCreadoPorNombre() : "otro mozo";
             throw new BusinessException("La mesa " + comanda.getMesa() + " la atiende " + quien
                     + ". Que lo cargue " + quien + " o el cajero.");
         }
@@ -412,9 +415,16 @@ public class PedidoService {
         };
     }
 
-    /** Corrige nombre, teléfono, dirección o mesa. Solo cambia lo que viene con valor. */
+    /** Corrige nombre, teléfono, dirección, mesa o mozo. Solo cambia lo que viene con valor. */
     public PedidoResponseDTO actualizarDatosCliente(Long pedidoId, PedidoDatosClienteDTO dto) {
         Pedido pedido = buscarEditable(pedidoId);
+        if (dto.getMozoId() != null && !dto.getMozoId().equals(pedido.getMozoId())) {
+            if (!pedido.esComandaPorTarjetas()) throw new BusinessException("Solo las mesas tienen mozo asignado.");
+            if (tieneRol(Rol.MOZO)) throw new BusinessException("El mozo de la mesa lo cambia el cajero o el admin.");
+            Usuario mozo = mozoElegido(dto.getMozoId(), false);
+            pedido.setMozoId(mozo.getId());
+            pedido.setMozoNombre(mozo.getNombre());
+        }
         if (dto.getNombreCliente() != null) pedido.setNombreCliente(dto.getNombreCliente());
         if (dto.getTelefonoCliente() != null) pedido.setTelefonoCliente(dto.getTelefonoCliente());
         if (dto.getDireccionEntrega() != null) pedido.setDireccionEntrega(dto.getDireccionEntrega());
@@ -553,25 +563,35 @@ public class PedidoService {
         if (!tieneRol(Rol.MOZO)) return pedidos;
         Usuario yo = usuarioAutenticado();
         if (yo == null) return List.of();
-        Set<Long> mozos = idsDeMozos();
-        return pedidos.stream().filter(p -> esDelMozo(p, yo, mozos)).toList();
+        return pedidos.stream().filter(p -> esDelMozo(p, yo)).toList();
     }
 
     /**
-     * El mozo ve y maneja lo que cargó él y, en las comandas de mesa, también
-     * las que abrió el cajero o el admin (no las de otro mozo).
+     * El mozo ve y maneja solo sus mesas: las que tiene asignadas o, si la mesa
+     * no tiene mozo asignado (pedidos de versiones anteriores), las que cargó él.
      */
-    private static boolean esDelMozo(Pedido pedido, Usuario mozo, Set<Long> idsDeMozos) {
-        Long creador = pedido.getCreadoPorUsuarioId();
-        if (mozo.getId().equals(creador)) return true;
-        return pedido.esComandaPorTarjetas() && creador != null && !idsDeMozos.contains(creador);
+    private static boolean esDelMozo(Pedido pedido, Usuario mozo) {
+        if (pedido.getMozoId() != null) return pedido.getMozoId().equals(mozo.getId());
+        return mozo.getId().equals(pedido.getCreadoPorUsuarioId());
     }
 
-    private Set<Long> idsDeMozos() {
-        return usuarioRepository.findAll().stream()
-                .filter(u -> u.getRol() == Rol.MOZO)
-                .map(Usuario::getId)
-                .collect(Collectors.toSet());
+    /**
+     * El mozo que eligieron el admin o el cajero para una mesa. Si no hay
+     * ningún mozo activo, la mesa queda sin mozo (la atienden ellos).
+     */
+    private Usuario mozoElegido(Long mozoId, boolean mesaNueva) {
+        if (mozoId == null) {
+            boolean hayMozos = usuarioRepository.findAll().stream()
+                    .anyMatch(u -> u.getRol() == Rol.MOZO && u.estaActivo());
+            if (mesaNueva && hayMozos) throw new BusinessException("Elegí qué mozo atiende la mesa.");
+            return null;
+        }
+        Usuario mozo = usuarioRepository.findById(mozoId)
+                .orElseThrow(() -> new BusinessException("Ese mozo no existe."));
+        if (mozo.getRol() != Rol.MOZO || !mozo.estaActivo()) {
+            throw new BusinessException("Elegí un mozo activo para la mesa.");
+        }
+        return mozo;
     }
 
     private List<Pedido> canceladosRecientes(List<Pedido> cancelados) {
@@ -581,11 +601,11 @@ public class PedidoService {
                 .toList();
     }
 
-    /** El mozo solo edita los pedidos que cargó él. */
+    /** El mozo solo edita sus mesas. */
     private void verificarPuedeEditar(Pedido pedido) {
         if (!tieneRol(Rol.MOZO)) return;
         Usuario yo = usuarioAutenticado();
-        if (yo == null || !esDelMozo(pedido, yo, idsDeMozos())) {
+        if (yo == null || !esDelMozo(pedido, yo)) {
             throw new BusinessException("Solo podés editar los pedidos de tus propias mesas.");
         }
     }
@@ -712,6 +732,7 @@ public class PedidoService {
                 .collect(Collectors.joining(","));
         return String.join("|", "PED", autenticado != null ? String.valueOf(autenticado.getId()) : "web",
                 String.valueOf(dto.getTipo()),
+                Objects.toString(dto.getMozoId(), ""),
                 Objects.toString(dto.getTelefonoCliente(), "").trim(),
                 Objects.toString(dto.getNombreCliente(), "").trim(),
                 Objects.toString(dto.getMesa(), "").trim(),
@@ -758,6 +779,8 @@ public class PedidoService {
                 .mesa(p.getMesa())
                 .creadoPorUsuarioId(p.getCreadoPorUsuarioId())
                 .creadoPorNombre(p.getCreadoPorNombre())
+                .mozoId(p.getMozoId())
+                .mozoNombre(p.getMozoNombre())
                 .modificadoEn(p.getModificadoEn())
                 .detalleSnapshotAntesEdicion(p.getDetalleSnapshotAntesEdicion())
                 .metodoPagoPreferido(p.getMetodoPagoPreferido())

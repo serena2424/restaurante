@@ -88,6 +88,16 @@ public class UsuarioService {
                 .collect(Collectors.toList());
     }
 
+    /** Mozos activos, para que el admin o el cajero elijan quién atiende una mesa. Sin emails. */
+    @Transactional(readOnly = true)
+    public List<UsuarioResponseDTO> mozosActivos() {
+        return usuarioRepository.findAll().stream()
+                .filter(u -> u.getRol() == Rol.MOZO && u.estaActivo())
+                .sorted(java.util.Comparator.comparing(Usuario::getNombre, String.CASE_INSENSITIVE_ORDER))
+                .map(u -> UsuarioResponseDTO.builder().id(u.getId()).nombre(u.getNombre()).rol(u.getRol()).activo(true).build())
+                .collect(Collectors.toList());
+    }
+
     @Transactional(readOnly = true)
     public UsuarioResponseDTO obtenerPorId(Long id) {
         return toDTO(usuarioRepository.findById(id)

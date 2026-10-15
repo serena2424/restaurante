@@ -87,6 +87,15 @@ public class ConfigLocal {
     @Builder.Default
     private String heroPos = "center";
 
+    /**
+     * Foto de fondo de la pantalla de inicio de sesión del panel: URL o base64. Vacío = fondo liso.
+     * Se recibe al guardar pero no viaja en /api/config (la página pública no la usa):
+     * se lee aparte en /api/config/fondo-login.
+     */
+    @Column(columnDefinition = "MEDIUMTEXT")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String fondoLoginUrl;
+
     private String temaAccent;
 
     @Builder.Default

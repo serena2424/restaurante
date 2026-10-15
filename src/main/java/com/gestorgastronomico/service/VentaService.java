@@ -166,6 +166,8 @@ public class VentaService {
         List<Venta> ventas = ventaRepository.findEntreJornadas(desde, hasta);
         double total = ventas.stream().mapToDouble(VentaService::totalDe).sum();
         double envios = ventas.stream().mapToDouble(VentaService::envioDe).sum();
+        List<Venta> deDelivery = ventas.stream().filter(VentaService::esDelivery).toList();
+        double totalDelivery = deDelivery.stream().mapToDouble(VentaService::totalDe).sum();
 
         Map<String, Map<String, Object>> porPago = new LinkedHashMap<>();
         for (MetodoPago metodo : MetodoPago.values()) {
@@ -194,6 +196,9 @@ public class VentaService {
         informe.put("total", total);
         informe.put("envios", envios);
         informe.put("totalSinEnvios", total - envios);
+        informe.put("totalLocal", total - totalDelivery);
+        informe.put("totalDelivery", totalDelivery);
+        informe.put("cantidadDelivery", deDelivery.size());
         informe.put("ticketPromedio", ventas.isEmpty() ? 0.0 : (total - envios) / ventas.size());
         informe.put("porMetodoPago", porPago);
         informe.put("productos", productos);
@@ -247,6 +252,10 @@ public class VentaService {
         resumen.put("cerradaEn", ahora.toString());
         resumen.put("totalCerrado", total);
         resumen.put("cantidadVentas", ventas.size());
+        double delivery = ventas.stream().filter(v -> "DELIVERY".equals(v.getTipoPedido()))
+                .mapToDouble(v -> v.getTotal() != null ? v.getTotal() : 0.0).sum();
+        resumen.put("totalDelivery", delivery);
+        resumen.put("totalLocal", total - delivery);
         return resumen;
     }
 
@@ -311,11 +320,17 @@ public class VentaService {
                 .sorted(Comparator.comparing(Venta::getFecha).thenComparing(Venta::getHora))
                 .map(this::toDTO)
                 .toList();
+        double total = ventas.stream().mapToDouble(VentaService::totalDe).sum();
+        List<Venta> deDelivery = ventas.stream().filter(VentaService::esDelivery).toList();
+        double totalDelivery = deDelivery.stream().mapToDouble(VentaService::totalDe).sum();
         return SesionCajaDTO.builder()
                 .apertura(apertura)
                 .cierre(cierre)
-                .total(ventas.stream().mapToDouble(VentaService::totalDe).sum())
+                .total(total)
                 .cantidadVentas(ventas.size())
+                .totalLocal(total - totalDelivery)
+                .totalDelivery(totalDelivery)
+                .cantidadDelivery(deDelivery.size())
                 .abierta(abierta)
                 .ventas(dtos)
                 .build();
@@ -398,6 +413,11 @@ public class VentaService {
 
     private static double totalDe(Venta v) {
         return v.getTotal() != null ? v.getTotal() : 0.0;
+    }
+
+    /** Las ventas de delivery se muestran aparte: esa plata se reparte después. */
+    private static boolean esDelivery(Venta v) {
+        return v.getPedido() != null && v.getPedido().getTipo() == TipoPedido.DELIVERY;
     }
 
     private static double envioDe(Venta v) {

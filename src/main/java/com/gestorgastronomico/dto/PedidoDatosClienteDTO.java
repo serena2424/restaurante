@@ -18,4 +18,7 @@ public class PedidoDatosClienteDTO {
 
     @Size(max = 20, message = "La mesa no puede superar los 20 caracteres")
     private String mesa;
+
+    /** Mozo que atiende la mesa. Solo lo eligen el admin y el cajero. */
+    private Long mozoId;
 }

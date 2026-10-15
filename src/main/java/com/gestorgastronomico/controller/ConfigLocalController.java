@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/config")
@@ -29,6 +30,13 @@ public class ConfigLocalController {
     @Operation(summary = "Configuración sin imágenes", description = "Para refrescar horarios y estado sin volver a bajar el logo y la portada.")
     public ResponseEntity<ConfigLocal> obtenerSinImagenes() {
         return ResponseEntity.ok().cacheControl(CacheControl.noCache()).body(service.obtenerSinImagenes());
+    }
+
+    @GetMapping("/fondo-login")
+    @Operation(summary = "Foto de fondo del inicio de sesión del panel")
+    public ResponseEntity<Map<String, String>> fondoLogin() {
+        String url = service.obtener().getFondoLoginUrl();
+        return ResponseEntity.ok().cacheControl(CacheControl.noCache()).body(Map.of("fondoLoginUrl", url != null ? url : ""));
     }
 
     @PatchMapping("/estado-manual")

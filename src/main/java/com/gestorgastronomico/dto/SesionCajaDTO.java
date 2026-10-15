@@ -17,6 +17,11 @@ public class SesionCajaDTO {
     private LocalDateTime cierre;
     private Double total;
     private Integer cantidadVentas;
+    /** Mesas y retiro: la plata del local. */
+    private Double totalLocal;
+    /** Delivery, con su envío: se reparte aparte. */
+    private Double totalDelivery;
+    private Integer cantidadDelivery;
     private boolean abierta;
     private List<VentaResponseDTO> ventas;
 }

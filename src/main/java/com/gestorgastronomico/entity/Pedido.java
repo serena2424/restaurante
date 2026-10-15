@@ -86,6 +86,13 @@ public class Pedido {
     private String creadoPorNombre;
 
     /**
+     * Mozo que atiende la mesa. Si la abre un mozo es él; si la abre el admin o
+     * el cajero, el mozo que eligieron. Null en retiro, delivery y pedidos viejos.
+     */
+    private Long mozoId;
+    private String mozoNombre;
+
+    /**
      * Última edición desde que el pedido entró o pasó a LISTO. En un pedido
      * cancelado guarda el momento de la cancelación.
      */
